@@ -198,9 +198,8 @@ path because it is likely to fail or fall back to an undesired slow path.
 
 ## Known Limitations
 
-- The repository does not include converted models.
-- 1024 x 1024 resources are not exposed in the UI.
-- SD3.5 experiments were removed from the app selection because the current
-  focus is a reproducible SD3 Medium path.
+- The GitHub repository does not include converted Core ML model folders; use
+  the Hugging Face model repository or regenerate them locally.
+- The app currently exposes 512 x 512 SD3 Medium 2-step and 4-step modes.
 - Performance depends heavily on iOS version, device thermals, and Core ML ANE
   compiler behavior.

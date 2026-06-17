@@ -110,7 +110,7 @@ ml-stable-diffusion/
   Local patched Swift package used by the app.
 
 scripts/
-  convert_sd35_diffusers_split_coreml.py
+  convert_sd3_medium_split_coreml.py
   quantize_mmdit_for_ane.py
   test_sd3_two_step_mac.py
   and other conversion/debug helpers.
@@ -128,8 +128,6 @@ The following files are local artifacts and should not be pushed:
 
 - `coremlsd3_2step/`
 - `coremlsd3_4step/`
-- `coremlsd3_1024/`
-- `coremlsd35/`
 - `sd3_*_build*/`
 - `*.safetensors`
 - `*.ckpt`
@@ -254,9 +252,8 @@ The fastest path for reproducing the current app resources is:
 
 ```bash
 # 1. Convert the distilled SD3 Medium checkpoint into split fp16 mlpackages.
-.venv/bin/python scripts/convert_sd35_diffusers_split_coreml.py \
+.venv/bin/python scripts/convert_sd3_medium_split_coreml.py \
   --ckpt-path checkpoints/diffusion_pytorch_model.safetensors \
-  --model-family sd3-medium \
   --latent-h 64 \
   --latent-w 64 \
   --batch-size 1 \

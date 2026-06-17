@@ -64,9 +64,8 @@ conditioning + Stage0...Stage6
 Convert fp16 split mlpackages:
 
 ```bash
-.venv/bin/python scripts/convert_sd35_diffusers_split_coreml.py \
+.venv/bin/python scripts/convert_sd3_medium_split_coreml.py \
   --ckpt-path checkpoints/diffusion_pytorch_model.safetensors \
-  --model-family sd3-medium \
   --latent-h 64 \
   --latent-w 64 \
   --batch-size 1 \
@@ -77,7 +76,6 @@ Convert fp16 split mlpackages:
 
 Notes:
 
-- `--model-family sd3-medium` selects the SD3 Medium transformer structure.
 - `--batch-size 1` matches distilled no-CFG inference.
 - `--stage-sizes 4,4,4,4,4,4` groups the 24 transformer blocks into 6 body
   stages. The final projection appears as an additional output stage in the
@@ -156,9 +154,8 @@ If your two-step checkpoint has the same SD3 Medium architecture, run the same
 split conversion but compile into `coremlsd3_2step`:
 
 ```bash
-.venv/bin/python scripts/convert_sd35_diffusers_split_coreml.py \
+.venv/bin/python scripts/convert_sd3_medium_split_coreml.py \
   --ckpt-path checkpoints/diffusion_pytorch_model_2step.safetensors \
-  --model-family sd3-medium \
   --latent-h 64 \
   --latent-w 64 \
   --batch-size 1 \

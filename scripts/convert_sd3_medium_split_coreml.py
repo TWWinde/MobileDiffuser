@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Convert an SD3/SD3.5 diffusers-format transformer safetensors file into split Core ML
-MMDiT stages compatible with the app's existing StableDiffusion3Pipeline runner.
+Convert an SD3 Medium diffusers-format transformer safetensors file into split
+Core ML MMDiT stages compatible with the app's StableDiffusion3Pipeline runner.
 
 The input model is the transformer component only. Text encoders, tokenizer, and
 VAE decoder are copied from the existing SD3 resources by the prepare script.
@@ -36,7 +36,7 @@ def cleanup_stale_packages(out_dir: Path) -> None:
         shutil.rmtree(path)
 
 
-class SD35Conditioning(nn.Module):
+class SD3Conditioning(nn.Module):
     def __init__(self, transformer):
         super().__init__()
         self.time_text_embed = transformer.time_text_embed
@@ -46,7 +46,7 @@ class SD35Conditioning(nn.Module):
         return (self.time_text_embed(timestep, pooled_text_embeddings),)
 
 
-class SD35InputStage(nn.Module):
+class SD3InputStage(nn.Module):
     def __init__(self, transformer):
         super().__init__()
         self.pos_embed = transformer.pos_embed
@@ -59,7 +59,7 @@ class SD35InputStage(nn.Module):
         return latent_image_embeddings, token_level_text_embeddings
 
 
-class SD35BlockStage(nn.Module):
+class SD3BlockStage(nn.Module):
     def __init__(self, transformer, start_block: int, end_block: int, latent_h: int, latent_w: int):
         super().__init__()
         self.blocks = nn.ModuleList([transformer.transformer_blocks[i] for i in range(start_block, end_block)])
@@ -152,9 +152,9 @@ def main() -> int:
     parser.add_argument("--ckpt-path", required=True, type=Path)
     parser.add_argument(
         "--model-family",
-        choices=("sd3-medium", "sd35-medium"),
-        default="sd35-medium",
-        help="Transformer architecture. Use sd3-medium for SD3 Medium diffusers-format checkpoints.",
+        choices=("sd3-medium",),
+        default="sd3-medium",
+        help="Transformer architecture. Only SD3 Medium is supported by this release script.",
     )
     parser.add_argument("--latent-h", type=int, default=64)
     parser.add_argument("--latent-w", type=int, default=64)
@@ -165,7 +165,7 @@ def main() -> int:
         help="Comma-separated block counts; must sum to 24.",
     )
     parser.add_argument("--ios-target", choices=("iOS17", "iOS18"), default="iOS18")
-    parser.add_argument("-o", "--output-dir", type=Path, default=Path("sd35_build_split_512"))
+    parser.add_argument("-o", "--output-dir", type=Path, default=Path("sd3_build_split_512"))
     args = parser.parse_args()
 
     if not args.ckpt_path.exists():
@@ -180,38 +180,21 @@ def main() -> int:
     args.output_dir.mkdir(parents=True, exist_ok=True)
     cleanup_stale_packages(args.output_dir)
 
-    if args.model_family == "sd3-medium":
-        transformer_kwargs = dict(
-            sample_size=128,
-            patch_size=2,
-            in_channels=16,
-            num_layers=24,
-            attention_head_dim=64,
-            num_attention_heads=24,
-            joint_attention_dim=4096,
-            caption_projection_dim=1536,
-            pooled_projection_dim=2048,
-            out_channels=16,
-            pos_embed_max_size=192,
-            dual_attention_layers=(),
-            qk_norm=None,
-        )
-    else:
-        transformer_kwargs = dict(
-            sample_size=128,
-            patch_size=2,
-            in_channels=16,
-            num_layers=24,
-            attention_head_dim=64,
-            num_attention_heads=24,
-            joint_attention_dim=4096,
-            caption_projection_dim=1536,
-            pooled_projection_dim=2048,
-            out_channels=16,
-            pos_embed_max_size=384,
-            dual_attention_layers=tuple(range(13)),
-            qk_norm="rms_norm",
-        )
+    transformer_kwargs = dict(
+        sample_size=128,
+        patch_size=2,
+        in_channels=16,
+        num_layers=24,
+        attention_head_dim=64,
+        num_attention_heads=24,
+        joint_attention_dim=4096,
+        caption_projection_dim=1536,
+        pooled_projection_dim=2048,
+        out_channels=16,
+        pos_embed_max_size=192,
+        dual_attention_layers=(),
+        qk_norm=None,
+    )
 
     LOG.info("Building %s transformer", args.model_family)
     transformer = SD3Transformer2DModel(**transformer_kwargs).to("cpu").to(torch.float32).eval()
@@ -228,7 +211,7 @@ def main() -> int:
     hidden_tokens = (args.latent_h // 2) * (args.latent_w // 2)
 
     convert_module(
-        SD35Conditioning(transformer),
+        SD3Conditioning(transformer),
         {
             "pooled_text_embeddings": torch.randn(batch, 2048, 1, 1),
             "timestep": torch.randn(batch),
@@ -239,7 +222,7 @@ def main() -> int:
     )
 
     convert_module(
-        SD35InputStage(transformer),
+        SD3InputStage(transformer),
         {
             "latent_image_embeddings": torch.randn(batch, 16, args.latent_h, args.latent_w),
             "token_level_text_embeddings": torch.randn(batch, 4096, 1, 154),
@@ -257,7 +240,7 @@ def main() -> int:
             "token_level_text_embeddings_out",
         ]
         convert_module(
-            SD35BlockStage(transformer, start, end, args.latent_h, args.latent_w),
+            SD3BlockStage(transformer, start, end, args.latent_h, args.latent_w),
             {
                 "latent_image_embeddings": torch.randn(batch, hidden_tokens, 1536),
                 "token_level_text_embeddings": torch.randn(batch, 154, 1536),
