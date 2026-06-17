@@ -79,8 +79,8 @@ class DiffusionViewModel: ObservableObject {
         guard let url = SD3PipelineLoader.resolveResourceURL(
             folderName: folderName
         ) else {
-            errorMessage = "\(selectedModel.shortName) \(resolution.label) resources not found in app bundle. Confirm \(folderName)/ Target Membership."
-            statusMessage = "\(selectedModel.displayName) \(resolution.label) resources not found at \(folderName)."
+            errorMessage = "\(selectedModel.shortName) \(resolution.label) resources not found. Open Settings to download \(folderName)."
+            statusMessage = "\(selectedModel.displayName) \(resolution.label) resources not found. Download models in Settings."
             resourceURL = nil
             isResourcesValid = false
             return
@@ -289,8 +289,10 @@ class DiffusionViewModel: ObservableObject {
 
 struct ContentView: View {
     @StateObject private var viewModel = DiffusionViewModel()
+    @StateObject private var resourceManager = ModelResourceManager()
     @Environment(\.colorScheme) private var colorScheme
     @FocusState private var isPromptFocused: Bool
+    @State private var isSettingsPresented = false
 
     private var themeTextColor: Color {
         colorScheme == .dark ? .white : .black
@@ -309,6 +311,22 @@ struct ContentView: View {
     var body: some View {
         VStack(spacing: 14) {
             VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Spacer()
+
+                    Button {
+                        isSettingsPresented = true
+                    } label: {
+                        Image(systemName: "gearshape")
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundColor(themeTextColor)
+                            .frame(width: 36, height: 36)
+                            .background(Color(UIColor.secondarySystemBackground))
+                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    }
+                    .disabled(viewModel.isGenerating)
+                }
+
                 HStack(alignment: .center, spacing: 10) {
                     Picker(
                         "Diffusion steps",
@@ -509,6 +527,136 @@ struct ContentView: View {
         )) { _ in
             viewModel.unloadPipeline(reason: "backgrounded")
         }
+        .sheet(isPresented: $isSettingsPresented) {
+            ModelSettingsView(
+                resourceManager: resourceManager,
+                selectedModel: viewModel.selectedModel,
+                onResourcesChanged: {
+                    viewModel.unloadPipeline(reason: "resources-updated")
+                    viewModel.validateResources()
+                }
+            )
+        }
+    }
+}
+
+struct ModelSettingsView: View {
+    @ObservedObject var resourceManager: ModelResourceManager
+    let selectedModel: DiffusionModelKind
+    let onResourcesChanged: () -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var themeTextColor: Color {
+        colorScheme == .dark ? .white : .black
+    }
+
+    private var secondaryTextColor: Color {
+        themeTextColor.opacity(0.65)
+    }
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Model Resources")
+                        .font(.system(size: 24, weight: .bold))
+                        .foregroundColor(themeTextColor)
+
+                    Text("Download SD3 Medium Core ML resources into this app. The files are stored locally and reused across launches.")
+                        .font(.system(size: 14))
+                        .foregroundColor(secondaryTextColor)
+                }
+
+                VStack(alignment: .leading, spacing: 12) {
+                    ResourceStatusRow(
+                        title: "2 steps",
+                        isReady: resourceManager.hasResources(for: .sd3MediumTwoStep)
+                    )
+                    ResourceStatusRow(
+                        title: "4 steps",
+                        isReady: resourceManager.hasResources(for: .sd3MediumFourStep)
+                    )
+                }
+
+                if resourceManager.isDownloading {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ProgressView(value: resourceManager.progress)
+                            .progressViewStyle(.linear)
+                        Text(resourceManager.statusMessage)
+                            .font(.system(size: 12))
+                            .foregroundColor(secondaryTextColor)
+                            .lineLimit(3)
+                    }
+                } else {
+                    Text(resourceManager.statusMessage)
+                        .font(.system(size: 12))
+                        .foregroundColor(secondaryTextColor)
+                        .lineLimit(3)
+                }
+
+                VStack(spacing: 10) {
+                    Button {
+                        Task {
+                            await resourceManager.downloadSelected(selectedModel)
+                            onResourcesChanged()
+                        }
+                    } label: {
+                        Label("Download Selected Model", systemImage: "arrow.down.circle")
+                            .frame(maxWidth: .infinity, minHeight: 46)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(resourceManager.isDownloading)
+
+                    Button {
+                        Task {
+                            await resourceManager.downloadAll()
+                            onResourcesChanged()
+                        }
+                    } label: {
+                        Label("Download 2-Step and 4-Step", systemImage: "square.and.arrow.down")
+                            .frame(maxWidth: .infinity, minHeight: 46)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(resourceManager.isDownloading)
+                }
+
+                Spacer()
+            }
+            .padding(20)
+            .navigationTitle("Settings")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") {
+                        onResourcesChanged()
+                        dismiss()
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct ResourceStatusRow: View {
+    let title: String
+    let isReady: Bool
+
+    var body: some View {
+        HStack {
+            Text(title)
+                .font(.system(size: 16, weight: .semibold))
+
+            Spacer()
+
+            Label(isReady ? "Ready" : "Missing", systemImage: isReady ? "checkmark.circle.fill" : "arrow.down.circle")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundColor(isReady ? .green : .orange)
+        }
+        .padding(12)
+        .background(Color(UIColor.secondarySystemBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 }
 

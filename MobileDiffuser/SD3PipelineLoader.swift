@@ -47,6 +47,14 @@ enum SD3PipelineLoader {
         in bundle: Bundle = .main,
         folderName: String = DiffusionModelKind.sd3MediumTwoStep.resourceFolderName
     ) -> URL? {
+        let downloadedURL = ModelResourceLocations.modelsRootURL.appending(
+            path: folderName,
+            directoryHint: .isDirectory
+        )
+        if hasRequiredResources(at: downloadedURL) {
+            return downloadedURL
+        }
+
         if let folderURL = bundle.url(forResource: folderName, withExtension: nil) {
             return folderURL
         }

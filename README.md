@@ -34,8 +34,9 @@ Hugging Face:
 
 [Wenwu2000/MobileDiffuser-SD3-medium](https://huggingface.co/Wenwu2000/MobileDiffuser-SD3-medium)
 
-The app expects the compiled Core ML folders to sit directly in the project
-root:
+The app can download these resources from its Settings panel after launch. For
+development, you may also place the compiled Core ML folders directly in the
+project root and add them to the Xcode target manually:
 
 ```text
 MobileDiffuser/
@@ -46,7 +47,7 @@ MobileDiffuser/
   ml-stable-diffusion/
 ```
 
-Download with Git LFS:
+Manual download with Git LFS:
 
 ```bash
 cd /path/to/MobileDiffuser
@@ -134,8 +135,8 @@ docs/
 - iOS 18.2 or newer deployment target.
 - iPhone 15 Pro or newer is recommended.
 - Apple Developer account for running on a physical iPhone.
-- Locally generated Core ML resources in `coremlsd3_2step/` and/or
-  `coremlsd3_4step/`.
+- Network access on device for in-app model download, or manually bundled Core
+  ML resources for offline development.
 
 ### For converting models
 
@@ -164,26 +165,37 @@ docs/
    pip install -r scripts/requirements.txt
    ```
 
-3. Prepare model resources.
+3. Open `MobileDiffuser.xcodeproj` in Xcode.
 
-   The app expects at least one of:
+4. Set your signing team.
+
+   The open-source project intentionally uses:
 
    ```text
-   coremlsd3_2step/
-   coremlsd3_4step/
+   PRODUCT_BUNDLE_IDENTIFIER = com.example.MobileDiffuser
+   DEVELOPMENT_TEAM = ""
    ```
 
-   Xcode runs `scripts/download_sd3_resources.sh` before copying app resources.
-   If these folders are missing, the script automatically downloads the
-   prebuilt Core ML resources from Hugging Face. Install either downloader first:
+   In Xcode, select the `MobileDiffuser` target, choose your Team, and change
+   the bundle identifier to something unique, for example:
 
-   ```bash
-   pip install -U huggingface_hub
-   # or
-   brew install git-lfs
+   ```text
+   com.yourname.MobileDiffuser
    ```
 
-   You can also download the resources manually:
+5. Build and run on a physical iPhone.
+
+   The app is designed for device testing. Simulator is useful for UI only; it
+   will not reproduce ANE behavior.
+
+6. Download model resources in the app.
+
+   Open the gear-shaped Settings panel and download either the selected model
+   or both 2-step and 4-step resources. The app stores downloaded resources in
+   its Application Support directory and reuses them across launches.
+
+   You can still download the resources manually for development and add them
+   to the app target yourself:
 
    ```bash
    git lfs install
@@ -209,46 +221,6 @@ docs/
 
    See [docs/REPRODUCING_MODELS.md](docs/REPRODUCING_MODELS.md) for the full
    conversion flow.
-
-   To disable build-time downloading, set this environment variable in the
-   Xcode scheme:
-
-   ```text
-   MOBILEDIFFUSER_SKIP_MODEL_DOWNLOAD=1
-   ```
-
-4. Open `MobileDiffuser.xcodeproj` in Xcode.
-
-5. Set your signing team.
-
-   The open-source project intentionally uses:
-
-   ```text
-   PRODUCT_BUNDLE_IDENTIFIER = com.example.MobileDiffuser
-   DEVELOPMENT_TEAM = ""
-   ```
-
-   In Xcode, select the `MobileDiffuser` target, choose your Team, and change
-   the bundle identifier to something unique, for example:
-
-   ```text
-   com.yourname.MobileDiffuser
-   ```
-
-6. Confirm resource folder target membership.
-
-   If you generated `coremlsd3_2step/` or `coremlsd3_4step/`, add the folder to
-   the app target as a folder reference. It must appear in the app bundle as:
-
-   ```text
-   MobileDiffuser.app/coremlsd3_2step/
-   MobileDiffuser.app/coremlsd3_4step/
-   ```
-
-7. Build and run on a physical iPhone.
-
-   The app is designed for device testing. Simulator is useful for UI only; it
-   will not reproduce ANE behavior.
 
 ## Model Conversion Summary
 
@@ -330,16 +302,11 @@ reproduction.
 
 ## Troubleshooting
 
-### `resources not found in app bundle`
+### `resources not found`
 
-Confirm the folder reference is included in the target membership and appears
-inside the built app bundle:
-
-```bash
-find ~/Library/Developer/Xcode/DerivedData \
-  -path '*MobileDiffuser.app/coremlsd3_2step' -o \
-  -path '*MobileDiffuser.app/coremlsd3_4step'
-```
+Open the in-app Settings panel and download the selected model. The app looks
+for downloaded resources in Application Support first, then falls back to
+bundled resources if you added them manually for development.
 
 ### ANE compile or load failure
 

@@ -5,15 +5,18 @@ MobileDiffuser. Model weights are not included in the GitHub repository.
 
 ## Expected Output
 
-The iOS app looks for resource folders at the repository root:
+The iOS app normally downloads resource folders from its Settings panel into
+Application Support. If you are regenerating resources locally, the expected
+folder names are:
 
 ```text
 coremlsd3_2step/
 coremlsd3_4step/
 ```
 
-Each folder is copied into the app bundle as a folder reference. The folder
-name must be preserved.
+The folder names must be preserved. You can upload them to the Hugging Face
+model repository for in-app download, or add them to the app target manually
+for local development.
 
 ## 0. Prepare Environment
 
@@ -186,22 +189,15 @@ du -sh coremlsd3_2step coremlsd3_4step
 Each folder is expected to be several GB. Current local builds are around 2.7
 GB per folder.
 
-## 7. Add Folders to Xcode
+## 7. Use the Resources
 
-In Xcode:
+The default app path is in-app download from the Hugging Face model repository.
+After uploading regenerated resources there, launch the app, open Settings, and
+download the selected model.
 
-1. Right-click the project navigator.
-2. Choose "Add Files to MobileDiffuser...".
-3. Select `coremlsd3_2step` and/or `coremlsd3_4step`.
-4. Use folder references so the blue folder name is preserved.
-5. Enable target membership for `MobileDiffuser`.
-
-The built app must contain:
-
-```text
-MobileDiffuser.app/coremlsd3_2step/
-MobileDiffuser.app/coremlsd3_4step/
-```
+For local development you may also add `coremlsd3_2step` and/or
+`coremlsd3_4step` to the Xcode target as folder references. This is optional
+and is not required for a fresh open-source build.
 
 ## 8. Build
 

@@ -7,14 +7,10 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		AA2E00012FC700000079115C /* coremlsd3_2step in Resources */ = {isa = PBXBuildFile; fileRef = AA2E00002FC700000079115C /* coremlsd3_2step */; };
-		AA4E00012FC700010079115C /* coremlsd3_4step in Resources */ = {isa = PBXBuildFile; fileRef = AA4E00002FC700010079115C /* coremlsd3_4step */; };
 		AABB15162F6995CE007A3533 /* StableDiffusion in Frameworks */ = {isa = PBXBuildFile; productRef = AABB15152F6995CE007A3533 /* StableDiffusion */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		AA2E00002FC700000079115C /* coremlsd3_2step */ = {isa = PBXFileReference; lastKnownFileType = folder; path = coremlsd3_2step; sourceTree = "<group>"; };
-		AA4E00002FC700010079115C /* coremlsd3_4step */ = {isa = PBXFileReference; lastKnownFileType = folder; path = coremlsd3_4step; sourceTree = "<group>"; };
 		AABB15032F698F45007A3533 /* MobileDiffuser.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MobileDiffuser.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -43,8 +39,6 @@
 			children = (
 				AABB15052F698F45007A3533 /* MobileDiffuser */,
 				AABB15042F698F45007A3533 /* Products */,
-				AA2E00002FC700000079115C /* coremlsd3_2step */,
-				AA4E00002FC700010079115C /* coremlsd3_4step */,
 			);
 			sourceTree = "<group>";
 		};
@@ -65,7 +59,6 @@
 			buildPhases = (
 				AABB14FF2F698F45007A3533 /* Sources */,
 				AABB15002F698F45007A3533 /* Frameworks */,
-				AADL00012FD000000079115C /* Download SD3 Resources */,
 				AABB15012F698F45007A3533 /* Resources */,
 			);
 			buildRules = (
@@ -125,37 +118,10 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				AA2E00012FC700000079115C /* coremlsd3_2step in Resources */,
-				AA4E00012FC700010079115C /* coremlsd3_4step in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
-
-/* Begin PBXShellScriptBuildPhase section */
-		AADL00012FD000000079115C /* Download SD3 Resources */ = {
-			isa = PBXShellScriptBuildPhase;
-			alwaysOutOfDate = 1;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputFileListPaths = (
-			);
-			inputPaths = (
-				"$(SRCROOT)/scripts/download_sd3_resources.sh",
-			);
-			name = "Download SD3 Resources";
-			outputFileListPaths = (
-			);
-			outputPaths = (
-				"$(SRCROOT)/coremlsd3_2step",
-				"$(SRCROOT)/coremlsd3_4step",
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /bin/sh;
-			shellScript = "bash \"$SRCROOT/scripts/download_sd3_resources.sh\"\n";
-		};
-/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		AABB14FF2F698F45007A3533 /* Sources */ = {

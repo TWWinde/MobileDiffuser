@@ -115,7 +115,8 @@ Expected:
 
 ## Debugging Checklist
 
-1. Confirm the app bundle contains the selected resource folder.
+1. Confirm Settings downloaded the selected resource folder, or that the app
+   bundle contains a manually bundled resource folder.
 2. Confirm `SD3PipelineLoader` prints split MMDiT stage count.
 3. Confirm logs show `aneFirst`.
 4. Generate once after a fresh install.
