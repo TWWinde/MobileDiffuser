@@ -1,0 +1,58 @@
+# macOS / Xcode
+.DS_Store
+xcuserdata/
+*.xcuserstate
+*.xcuserdatad/
+*.moved-aside
+*.pbxuser
+!default.pbxuser
+*.xccheckout
+*.xcscmblueprint
+
+# Swift Package Manager build artifacts
+.build/
+.swiftpm/
+DerivedData/
+Package.resolved
+ml-stable-diffusion/.build/
+ml-stable-diffusion/.swiftpm/
+ml-stable-diffusion/.git/
+ml-stable-diffusion/Package.resolved
+
+# Python environment for model conversion
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+
+# Model conversion intermediates (large, regenerable)
+sd3_build/
+sd3_build_b1/
+sd3_build_*/
+sd35_build_*/
+sd3_four_step_build_split_512/
+archive/
+*.safetensors
+*.ckpt
+*.pt
+*.pth
+*.bin
+
+# Generated images / inference outputs
+gen/
+
+# Local logs
+*.log
+
+# Large Core ML / Core ML Tools artifacts.
+# The app expects these folders at the repository root, but they are generated
+# locally from model weights and are intentionally not committed.
+coremlsd3/
+coremlsd3_*/
+coremlsd35/
+*.mlmodelc/
+*.mlpackage/
+*.mlmodel
+
+# Legacy preview models are too large for source control.
+MobileDiffuser/Preview Content/CoreMLModels/
