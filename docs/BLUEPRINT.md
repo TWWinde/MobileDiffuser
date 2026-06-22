@@ -72,8 +72,18 @@ development and as versioned git dependencies in release.
 
 ### The boundary — `DiffusionEngine`
 
-The app talks only to `DiffusionEngine`. A single `MLXDiffusionEngine` drives any model by
-consuming the `DiffusionArchitecture` seam each model package implements:
+The app talks only to `DiffusionEngine`. There are **two engine shapes** behind it:
+
+- **`MLXDiffusionEngine`** (in core, iOS + macOS) — drives any *block-streamable*
+  `DiffusionArchitecture` and applies the partial-load ladder. This is the path for Z-Image
+  and the iPhone.
+- **A whole-pipeline facade engine** (macOS-only) — wraps a monolithic pipeline that owns its
+  own denoise loop. `flux-2-swift-mlx` is exactly this: it is **macOS-15-only** and exposes one
+  `Flux2Pipeline.generateTextToImage(...)` with no per-block access, so it cannot be
+  block-streamed. It becomes a `DiffusionEngine` facade in the macOS target — *not* in core
+  (core must stay iOS-buildable, and flux-2-swift-mlx can't build for iOS).
+
+`MLXDiffusionEngine` consumes the `DiffusionArchitecture` seam each model package implements:
 
 ```
 DiffusionEngine        load / generate(progress) / unload / capabilities
@@ -165,6 +175,12 @@ shared components.
   On Mac, run FLUX.2 Klein 4B (via `flux-2-swift-mlx`) and Z-Image Turbo (new package)
   end-to-end. Then on device: measure Klein 4B 4-bit two-phase peak on an 8 GB iPhone and
   Z-Image block-streaming. Prove/disprove MLX-on-iPhone.
+  **Status (2026-06-23):** core engine landed and unit-tested — `MLXDiffusionEngine`
+  (streaming denoise loop), `FlowMatchEulerSampler`, `SafetensorsWeightSource`,
+  `ImageConversion`, `MemoryGovernor`/`DeviceTier`/`MemoryProbe`. Pure-logic tests
+  (governor decisions, sampler schedule) pass in CI; MLX-eval tests pass in Xcode (a headless
+  CI box has no Metal lib). Remaining: real Z-Image S3-DiT architecture, the macOS FLUX
+  facade engine, MLX cache governance, and on-device memory measurement.
 - **Phase 1 — Mac app.** Dark-studio shell, Models gallery + detail/download (resumable),
   Create workspace, Library, memory governor, persisted image cache.
 - **Phase 2 — iPhone.** Same shell adapted (TabView), `MemoryProbe` gating,
