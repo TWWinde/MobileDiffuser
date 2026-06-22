@@ -37,6 +37,13 @@ weights or compiled Core ML bundles. After launch, open Settings and download
 the selected SD3 Medium resources into the app sandbox. The downloaded files
 are stored locally and reused across launches.
 
+<p>
+  <img src="docs/images/settings-download-2step.jpg" alt="MobileDiffuser Settings downloading SD3 Medium Core ML resources" width="280">
+</p>
+
+The Settings panel shows whether each model is missing or ready, and displays
+the current file path while downloading large Core ML resource folders.
+
 ## Prebuilt Models
 
 Prebuilt Core ML resources and the source distilled checkpoints are hosted on
