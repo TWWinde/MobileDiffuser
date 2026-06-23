@@ -149,6 +149,22 @@ final class AppModel {
 
     /// Short label of the active FLUX recipe, e.g. "8-bit · 4-bit encoder".
     var fluxRecipeLabel: String { "\(fluxTransformer.label) · \(fluxEncoder.label) encoder" }
+
+    /// Active-recipe components not yet on disk (drives the quantified Download label + tri-state).
+    var fluxActiveMissing: [Flux2FacadeEngine.Flux2ComponentInfo] {
+        let active = Set(fluxActiveComponentIDs)
+        return fluxComponents().filter { active.contains($0.id) && !$0.isDownloaded }
+    }
+    var fluxMissingBytes: Int64 { fluxActiveMissing.reduce(0) { $0 + $1.bytes } }
+    var fluxMissingCount: Int { fluxActiveMissing.count }
+    var fluxActiveCount: Int { fluxActiveComponentIDs.count }
+
+    /// "Complete · 570 MB" when partly installed, else "Download · 4.6 GB" — so the action says
+    /// exactly what one tap fetches.
+    var fluxDownloadActionLabel: String {
+        let bytes = ByteCountFormatter.string(fromByteCount: fluxMissingBytes, countStyle: .file)
+        return (fluxMissingCount < fluxActiveCount) ? "Complete · \(bytes)" : "Download · \(bytes)"
+    }
     #endif
 
     private let downloader: ModelDownloader
@@ -203,6 +219,9 @@ final class AppModel {
         guard !inFlight else { return }
         inFlight = true; defer { inFlight = false }
         await downloadSelected()
+        #if os(macOS)
+        componentsRevision += 1   // model-level download changed the on-disk component set
+        #endif
     }
 
     func generate() async {
@@ -232,6 +251,9 @@ final class AppModel {
             break
         }
         phase = .idle
+        #if os(macOS)
+        componentsRevision += 1   // model-level delete changed the on-disk component set
+        #endif
     }
 
     /// Download the selected model's weights. No reentrancy guard — callers hold `inFlight`.

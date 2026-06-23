@@ -21,7 +21,12 @@ struct ModelsView: View {
             .padding(Theme.Space.lg)
         }
         .background(Theme.bg)
-        .sheet(item: $detail) { m in ModelDetail(model: model, item: m) }
+        .sheet(item: $detail) { m in
+            ModelDetail(model: model, item: m)
+                #if os(macOS)
+                .frame(minWidth: 520, idealWidth: 560, minHeight: 560, idealHeight: 680)
+                #endif
+        }
     }
 }
 
@@ -62,6 +67,9 @@ struct ModelCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.sm) {
+            #if os(macOS)
+            let _ = model.componentsRevision   // re-render when the on-disk component set changes
+            #endif
             HStack {
                 Text(m.displayName).font(.headline).foregroundStyle(Theme.textPrimary)
                 Spacer()
@@ -87,10 +95,15 @@ struct ModelCard: View {
             }
             #if os(macOS)
             if m.family == .flux2 {
-                // The active recipe + whether it's installed, so the Use/Download action is unambiguous.
-                Text("Active: \(model.fluxRecipeLabel) · \(model.isDownloaded(m) ? "installed" : "not installed")")
-                    .font(.caption2)
-                    .foregroundStyle(model.isDownloaded(m) ? Theme.fitGreen : Theme.textTertiary)
+                // The active recipe + a tri-state install status, so the Use/Download action is clear.
+                let missing = model.fluxMissingCount
+                let total = model.fluxActiveCount
+                let status = missing == 0 ? "installed"
+                    : (missing == total ? "not installed" : "\(missing) of \(total) missing")
+                let color: Color = missing == 0 ? Theme.fitGreen
+                    : (missing == total ? Theme.textTertiary : Theme.fitAmber)
+                Text("Active: \(model.fluxRecipeLabel) · \(status)")
+                    .font(.caption2).foregroundStyle(color)
             }
             #endif
             ComponentBar(components: m.variants[0].components)
@@ -137,7 +150,11 @@ struct ModelAction: View {
             Button {
                 model.selectedID = m.id; Task { await model.download() }
             } label: {
+                #if os(macOS)
+                Label(m.family == .flux2 ? model.fluxDownloadActionLabel : "Download", systemImage: "arrow.down.circle")
+                #else
                 Label("Download", systemImage: "arrow.down.circle")
+                #endif
             }
             .buttonStyle(StudioButtonStyle(.secondary)).disabled(model.isBusy)
         }
@@ -173,6 +190,14 @@ private struct ModelDetail: View {
                 if item.family == .flux2 {
                     // FLUX: choose precision, then manage each weight component individually.
                     precisionSection
+                    if model.selectedID == item.id, case .downloading(let f) = model.phase {
+                        // A card-initiated download (completing the active recipe) is visible here too.
+                        VStack(spacing: Theme.Space.xs) {
+                            ProgressView(value: f).tint(Theme.accent)
+                            Text("Downloading… \(Int(f * 100))%")
+                                .font(.caption).monospacedDigit().foregroundStyle(Theme.textSecondary)
+                        }.frame(maxWidth: .infinity)
+                    }
                     componentsSection
                     if model.isDownloaded(item) {
                         Button { model.selectedID = item.id; dismiss() } label: {
@@ -191,6 +216,7 @@ private struct ModelDetail: View {
             .padding(Theme.Space.xl)
         }
         .background(Theme.bg)
+        .scrollBounceBehavior(.basedOnSize)
         .confirmationDialog("Delete \(item.displayName) weights?",
                             isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("Delete", role: .destructive) { Task { await model.delete(item) } }
@@ -338,8 +364,9 @@ private struct ModelDetail: View {
             Spacer(minLength: Theme.Space.sm)
             Text(ByteCountFormatter.string(fromByteCount: c.bytes, countStyle: .file))
                 .font(.caption).foregroundStyle(Theme.textSecondary)
-            componentControl(c)
+            componentControl(c).frame(width: 84, alignment: .trailing)
         }
+        .frame(minHeight: 52)
         .padding(.vertical, 8)
     }
 
