@@ -373,8 +373,17 @@ private struct ModelDetail: View {
     @ViewBuilder private func componentControl(_ c: Flux2FacadeEngine.Flux2ComponentInfo) -> some View {
         if model.fluxComponentDownloadID == c.id {
             ProgressView(value: model.fluxComponentFraction).frame(width: 54).tint(Theme.accent)
+        } else if model.fluxComponentError?.id == c.id {
+            Button { Task { await model.downloadFluxComponent(c.id) } } label: {
+                HStack(spacing: 4) { Image(systemName: "arrow.clockwise"); Text("Retry") }
+                    .font(.caption.weight(.medium)).foregroundStyle(Theme.danger)
+                    .padding(.horizontal, 10).padding(.vertical, 6)
+                    .overlay(Capsule().strokeBorder(Theme.danger.opacity(0.5)))
+            }
+            .buttonStyle(.plain).disabled(model.isBusy)
+            .accessibilityLabel("Retry \(c.title)")
         } else if c.isDownloaded {
-            Button { model.deleteFluxComponent(c.id) } label: {
+            Button { Task { await model.deleteFluxComponent(c.id) } } label: {
                 Image(systemName: "trash").foregroundStyle(Theme.textSecondary)
             }
             .buttonStyle(.plain).disabled(model.isBusy)

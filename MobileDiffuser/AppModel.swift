@@ -108,6 +108,14 @@ final class AppModel {
     /// Which FLUX component (by id) is downloading + its 0...1 progress, for the detail's list.
     var fluxComponentDownloadID: String?
     var fluxComponentFraction: Double = 0
+    /// A failed component download, surfaced as inline Retry — kept off the shared generation `phase`
+    /// so a failed Get never leaves a sticky "Failed" on the Create canvas.
+    var fluxComponentError: (id: String, message: String)?
+
+    static func friendlyDownloadError(_ error: Error) -> String {
+        if let urlError = error as? URLError, urlError.code == .notConnectedToInternet { return "No connection" }
+        return "Download failed"
+    }
     /// Bumped after a component download/delete so views re-read the on-disk component list.
     private(set) var componentsRevision = 0
 
@@ -118,20 +126,30 @@ final class AppModel {
     func downloadFluxComponent(_ id: String) async {
         guard !inFlight else { return }
         inFlight = true; defer { inFlight = false }
+        fluxComponentError = nil
         fluxComponentDownloadID = id; fluxComponentFraction = 0
         defer { fluxComponentDownloadID = nil; componentsRevision += 1 }
         do {
             try await Flux2FacadeEngine.downloadComponent(id) { fraction in
-                Task { @MainActor in self.fluxComponentFraction = fraction }
+                // Ignore a stale callback from a previous download.
+                Task { @MainActor in if self.fluxComponentDownloadID == id { self.fluxComponentFraction = fraction } }
             }
         } catch {
-            phase = .failed(String(describing: error))
+            fluxComponentError = (id, Self.friendlyDownloadError(error))
         }
     }
 
-    /// Delete one FLUX component's weights by id.
-    func deleteFluxComponent(_ id: String) {
+    /// Delete one FLUX component's weights by id. If it's part of the loaded recipe, unload first
+    /// so generation never runs against missing weights.
+    func deleteFluxComponent(_ id: String) async {
         guard !inFlight else { return }
+        inFlight = true; defer { inFlight = false }
+        if fluxActiveComponentIDs.contains(id),
+           let loaded = models.first(where: { $0.id == loadedID }), loaded.family == .flux2,
+           let current = engine {
+            engine = nil; loadedID = nil; loadedRecipe = nil
+            await current.unload()
+        }
         try? Flux2FacadeEngine.deleteComponent(id)
         componentsRevision += 1
     }
@@ -170,6 +188,7 @@ final class AppModel {
     private let downloader: ModelDownloader
     private var engine: (any DiffusionEngine)?
     private var loadedID: String?
+    private var loadedRecipe: String?   // FLUX: the active recipe label that's loaded, for reload-on-precision-change
     private var inFlight = false   // reentrancy lock: one download/generate at a time
 
     init() {
@@ -199,7 +218,11 @@ final class AppModel {
     var isDownloaded: Bool { isDownloaded(selected) }
 
     var isBusy: Bool {
-        switch phase { case .downloading, .loading, .generating: return true; default: return false }
+        switch phase { case .downloading, .loading, .generating: return true; default: break }
+        #if os(macOS)
+        if fluxComponentDownloadID != nil { return true }   // a per-component install is in flight
+        #endif
+        return false
     }
     var isFailed: Bool { if case .failed = phase { return true } else { return false } }
 
@@ -236,7 +259,7 @@ final class AppModel {
         guard !inFlight else { return }
         inFlight = true; defer { inFlight = false }
         if loadedID == model.id, let current = engine {
-            engine = nil; loadedID = nil
+            engine = nil; loadedID = nil; loadedRecipe = nil
             await current.unload()
         }
         switch model.family {
@@ -285,17 +308,22 @@ final class AppModel {
     private func runGenerate() async {
         let model = selected
         do {
-            // Z-Image needs its weights on disk before the engine can load them.
-            if model.family == .zImage, !isDownloaded {
+            // Ensure the selected model's active recipe is on disk before loading (all families).
+            if !isDownloaded(model) {
                 await downloadSelected()
-                guard isDownloaded else { return }
+                guard isDownloaded(model) else { return }
             }
 
-            if engine == nil || loadedID != model.id {
+            // Reload when the model changed OR (FLUX) the chosen precision recipe changed.
+            var needsReload = engine == nil || loadedID != model.id
+            #if os(macOS)
+            if model.family == .flux2, loadedRecipe != fluxRecipeLabel { needsReload = true }
+            #endif
+            if needsReload {
                 // Unload the previous engine BEFORE loading the new one, so two large weight sets
                 // are never resident at once (a model switch would otherwise peak ~10+ GB).
                 if let previous = engine {
-                    engine = nil; loadedID = nil
+                    engine = nil; loadedID = nil; loadedRecipe = nil
                     await previous.unload()
                 }
                 let built = try makeEngine(for: model)
@@ -305,6 +333,9 @@ final class AppModel {
                 }
                 engine = built
                 loadedID = model.id
+                #if os(macOS)
+                loadedRecipe = (model.family == .flux2) ? fluxRecipeLabel : nil
+                #endif
             }
             // Ensure the loaded engine is actually the selected model (a failed switch leaves none).
             guard let engine, loadedID == model.id else { phase = .failed("Model not loaded"); return }
