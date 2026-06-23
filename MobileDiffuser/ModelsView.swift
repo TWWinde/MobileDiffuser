@@ -4,6 +4,7 @@
 
 import SwiftUI
 import DiffusionCore
+import AppEngines   // re-exports Flux2DiffusionEngine on macOS (precision enums); empty on iOS
 
 /// Download center: family cards with precision chips, hardware-fit badges, and install/use.
 struct ModelsView: View {
@@ -159,6 +160,10 @@ private struct ModelDetail: View {
                     row("VAE", ByteCountFormatter.string(fromByteCount: v.components.vae, countStyle: .file))
                 }.studioCard()
 
+                #if os(macOS)
+                if item.family == .flux2 { precisionSection }
+                #endif
+
                 if model.selectedID == item.id, case .downloading(let f) = model.phase {
                     // Mirror the card's progress state so the detail reflects an in-flight download.
                     VStack(spacing: Theme.Space.xs) {
@@ -204,4 +209,49 @@ private struct ModelDetail: View {
             Text(value).foregroundStyle(Theme.textPrimary).monospacedDigit()
         }.font(.subheadline)
     }
+
+    #if os(macOS)
+    /// FLUX precision: independent transformer + text-encoder precision pickers. Changing either
+    /// re-points which weights are needed, so the install state below updates accordingly.
+    @ViewBuilder private var precisionSection: some View {
+        VStack(alignment: .leading, spacing: Theme.Space.sm) {
+            Text("PRECISION").font(.caption2.weight(.semibold)).foregroundStyle(Theme.textTertiary)
+            VStack(spacing: Theme.Space.sm) {
+                precisionRow(title: "Model precision",
+                             value: model.fluxTransformer.label, note: model.fluxTransformer.note) {
+                    ForEach(Flux2FacadeEngine.FluxTransformerPrecision.allCases) { option in
+                        Button(option.label) { withAnimation(Motion.select) { model.fluxTransformer = option } }
+                    }
+                }
+                Divider().background(Theme.hairline)
+                precisionRow(title: "Text encoder",
+                             value: model.fluxEncoder.label, note: model.fluxEncoder.note) {
+                    ForEach(Flux2FacadeEngine.FluxEncoderPrecision.allCases) { option in
+                        Button(option.label) { withAnimation(Motion.select) { model.fluxEncoder = option } }
+                    }
+                }
+            }
+            .studioCard()
+        }
+    }
+
+    @ViewBuilder private func precisionRow<Menu: View>(title: String, value: String, note: String,
+                                                       @ViewBuilder menu: () -> Menu) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.subheadline).foregroundStyle(Theme.textPrimary)
+                Text(note).font(.caption2).foregroundStyle(Theme.textTertiary)
+            }
+            Spacer(minLength: Theme.Space.md)
+            SwiftUI.Menu { menu() } label: {
+                HStack(spacing: 4) {
+                    Text(value).font(.subheadline).foregroundStyle(Theme.accent)
+                    Image(systemName: "chevron.up.chevron.down").font(.caption2).foregroundStyle(Theme.textTertiary)
+                }
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+        }
+    }
+    #endif
 }

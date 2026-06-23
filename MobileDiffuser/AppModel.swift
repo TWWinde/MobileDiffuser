@@ -96,6 +96,16 @@ final class AppModel {
         didSet { UserDefaults.standard.set(appearance.rawValue, forKey: "appearance") }
     }
 
+    #if os(macOS)
+    /// FLUX precision preferences (macOS only — FLUX is macOS-only), persisted across launches.
+    var fluxTransformer: Flux2FacadeEngine.FluxTransformerPrecision = .bit8 {
+        didSet { UserDefaults.standard.set(fluxTransformer.rawValue, forKey: "fluxTransformer") }
+    }
+    var fluxEncoder: Flux2FacadeEngine.FluxEncoderPrecision = .bit8 {
+        didSet { UserDefaults.standard.set(fluxEncoder.rawValue, forKey: "fluxEncoder") }
+    }
+    #endif
+
     private let downloader: ModelDownloader
     private var engine: (any DiffusionEngine)?
     private var loadedID: String?
@@ -109,6 +119,12 @@ final class AppModel {
         if let raw = UserDefaults.standard.string(forKey: "appearance"), let theme = AppTheme(rawValue: raw) {
             appearance = theme   // set in init: didSet does not fire, so no redundant write-back
         }
+        #if os(macOS)
+        if let raw = UserDefaults.standard.string(forKey: "fluxTransformer"),
+           let value = Flux2FacadeEngine.FluxTransformerPrecision(rawValue: raw) { fluxTransformer = value }
+        if let raw = UserDefaults.standard.string(forKey: "fluxEncoder"),
+           let value = Flux2FacadeEngine.FluxEncoderPrecision(rawValue: raw) { fluxEncoder = value }
+        #endif
     }
 
     var selected: DiffusionModel { models.first { $0.id == selectedID } ?? models[0] }
@@ -186,7 +202,7 @@ final class AppModel {
                 }
             case .flux2:
                 #if os(macOS)
-                try await Flux2FacadeEngine.download { fraction in
+                try await Flux2FacadeEngine.download(transformer: fluxTransformer, encoder: fluxEncoder) { fraction in
                     Task { @MainActor in if case .downloading = self.phase { self.phase = .downloading(fraction) } }
                 }
                 #endif
@@ -272,9 +288,10 @@ final class AppModel {
         case .zImage:
             return downloader.isDownloaded(repoId: model.variants[0].source.huggingFaceRepo)
         case .flux2:
-            // FLUX self-manages its weights inside the engine; ask it whether they're on disk.
+            // FLUX self-manages its weights inside the engine; ask it whether the chosen precision
+            // (transformer + matching Qwen3 encoder + VAE) is on disk.
             #if os(macOS)
-            return Flux2FacadeEngine.isDownloaded()
+            return Flux2FacadeEngine.isDownloaded(transformer: fluxTransformer, encoder: fluxEncoder)
             #else
             return false
             #endif
@@ -319,7 +336,7 @@ final class AppModel {
             return ZImageFacadeEngine(modelDirectory: dir)
         case .flux2:
             #if os(macOS)
-            return Flux2FacadeEngine()
+            return Flux2FacadeEngine(transformer: fluxTransformer, encoder: fluxEncoder)
             #else
             throw AppError.unsupportedOnPlatform("FLUX.2 runs on macOS only.")
             #endif
