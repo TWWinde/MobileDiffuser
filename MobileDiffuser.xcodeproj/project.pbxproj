@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		DDEE0000000000000000A001 /* ZImageMLX in Frameworks */ = {isa = PBXBuildFile; productRef = DDEE0000000000000000A003 /* ZImageMLX */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -26,6 +27,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				DDEE0000000000000000A001 /* ZImageMLX in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -68,6 +70,7 @@
 			);
 			name = MobileDiffuser;
 			packageProductDependencies = (
+				DDEE0000000000000000A003 /* ZImageMLX */,
 			);
 			productName = MobileDiffuser;
 			productReference = AABB15032F698F45007A3533 /* MobileDiffuser.app */;
@@ -98,6 +101,7 @@
 			mainGroup = AABB14FA2F698F44007A3533;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
+				DDEE0000000000000000A002 /* XCLocalSwiftPackageReference "../z-image-swift-mlx" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = AABB15042F698F45007A3533 /* Products */;
@@ -270,6 +274,8 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.example.MobileDiffuser;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -300,6 +306,8 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.example.MobileDiffuser;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -332,6 +340,20 @@
 		};
 /* End XCConfigurationList section */
 
+/* Begin XCLocalSwiftPackageReference section */
+		DDEE0000000000000000A002 /* XCLocalSwiftPackageReference "../z-image-swift-mlx" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "../z-image-swift-mlx";
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		DDEE0000000000000000A003 /* ZImageMLX */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = DDEE0000000000000000A002 /* XCLocalSwiftPackageReference "../z-image-swift-mlx" */;
+			productName = ZImageMLX;
+		};
+/* End XCSwiftPackageProductDependency section */
 
 	};
 	rootObject = AABB14FB2F698F44007A3533 /* Project object */;
