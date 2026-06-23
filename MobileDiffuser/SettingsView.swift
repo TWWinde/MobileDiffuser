@@ -71,7 +71,16 @@ struct SettingsView: View {
     private var storageSection: some View {
         section("Storage", icon: "internaldrive") {
             row("Models on disk", ByteCountFormatter.string(fromByteCount: usedBytes, countStyle: .file))
-            row("Location", model.storageLocation, mono: true)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Location").font(.subheadline).foregroundStyle(Theme.textSecondary)
+                Text(model.storageLocation)
+                    .font(.caption.monospaced()).foregroundStyle(Theme.textTertiary)
+                    .lineLimit(1).truncationMode(.middle).textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Location")
+            .accessibilityValue(model.storageLocation)
             Text("Z-Image weights download here on first use. FLUX.2 manages its own weights inside the engine on macOS.")
                 .font(.caption)
                 .foregroundStyle(Theme.textTertiary)
