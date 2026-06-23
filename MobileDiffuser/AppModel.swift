@@ -119,10 +119,7 @@ final class AppModel {
     /// In-app download applies to Z-Image; FLUX manages its own weights inside `load`.
     var managesOwnDownload: Bool { selected.family != .zImage }
 
-    var isDownloaded: Bool {
-        guard selected.family == .zImage else { return false }
-        return downloader.isDownloaded(repoId: selected.variants[0].source.huggingFaceRepo)
-    }
+    var isDownloaded: Bool { isDownloaded(selected) }
 
     var isBusy: Bool {
         switch phase { case .downloading, .loading, .generating: return true; default: return false }
@@ -237,8 +234,19 @@ final class AppModel {
     }
 
     func isDownloaded(_ model: DiffusionModel) -> Bool {
-        guard model.family == .zImage else { return false }
-        return downloader.isDownloaded(repoId: model.variants[0].source.huggingFaceRepo)
+        switch model.family {
+        case .zImage:
+            return downloader.isDownloaded(repoId: model.variants[0].source.huggingFaceRepo)
+        case .flux2:
+            // FLUX self-manages its weights inside the engine; ask it whether they're on disk.
+            #if os(macOS)
+            return Flux2FacadeEngine.isDownloaded()
+            #else
+            return false
+            #endif
+        default:
+            return false
+        }
     }
 
     /// How many catalog models have weights on disk (shown in Settings).
@@ -248,13 +256,17 @@ final class AppModel {
     func storageUsedBytes() async -> Int64 {
         let dir = downloader.downloadBase.appending(component: "models")
         return await Task.detached {
-            guard let walker = FileManager.default.enumerator(
-                at: dir, includingPropertiesForKeys: [.totalFileAllocatedSizeKey]) else { return Int64(0) }
             var total: Int64 = 0
-            for case let url as URL in walker {
-                let size = (try? url.resourceValues(forKeys: [.totalFileAllocatedSizeKey]))?.totalFileAllocatedSize
-                total += Int64(size ?? 0)
+            if let walker = FileManager.default.enumerator(
+                at: dir, includingPropertiesForKeys: [.totalFileAllocatedSizeKey]) {
+                for case let url as URL in walker {
+                    let size = (try? url.resourceValues(forKeys: [.totalFileAllocatedSizeKey]))?.totalFileAllocatedSize
+                    total += Int64(size ?? 0)
+                }
             }
+            #if os(macOS)
+            total += Flux2FacadeEngine.downloadedBytes()   // FLUX weights live in the engine's own cache
+            #endif
             return total
         }.value
     }

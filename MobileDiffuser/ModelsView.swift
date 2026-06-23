@@ -111,7 +111,7 @@ struct ModelAction: View {
             Button {
                 model.selectedID = m.id; dismiss()   // pick this model and return to Create
             } label: {
-                Label(m.family == .zImage ? "Use" : "Use (downloads on first run)", systemImage: "wand.and.stars")
+                Label(model.isDownloaded(m) ? "Use" : "Use (downloads on first run)", systemImage: "wand.and.stars")
             }
             .buttonStyle(StudioButtonStyle(.primary))
         } else {
