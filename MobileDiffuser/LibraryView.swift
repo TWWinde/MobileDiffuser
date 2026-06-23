@@ -3,71 +3,295 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 import SwiftUI
+import UniformTypeIdentifiers
 
-/// Your generated images. Tap one to see its prompt/params and reuse the settings.
-/// (In-session for now; on-disk persistence is a follow-up.)
+/// Your generated images. The grid shows every in-session generation (newest first); tapping a
+/// thumbnail opens a detail sheet with its prompt, params, a one-tap "Reuse settings", and an
+/// export action (Save to Photos on iOS / Export PNG on macOS). In-session only for now — on-disk
+/// persistence is a follow-up. Drives off a single shared `AppModel`; modifies no model state.
 struct LibraryView: View {
     @Bindable var model: AppModel
     @State private var selected: Generation?
 
-    private let columns = [GridItem(.adaptive(minimum: 120), spacing: 10)]
+    private let columns = [GridItem(.adaptive(minimum: 120), spacing: Theme.Space.sm)]
 
     var body: some View {
         Group {
             if model.history.isEmpty {
-                VStack(spacing: 12) {
-                    Image(systemName: "photo.on.rectangle.angled")
-                        .font(.system(size: 40, weight: .light)).foregroundStyle(.secondary)
-                    Text("Your generations appear here").font(.callout).foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                emptyState
             } else {
-                ScrollView {
-                    LazyVGrid(columns: columns, spacing: 10) {
-                        ForEach(model.history) { gen in
-                            Image(decorative: gen.image, scale: 1).resizable().aspectRatio(1, contentMode: .fill)
-                                .frame(maxWidth: .infinity).clipped()
-                                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                                .contentShape(Rectangle())
-                                .onTapGesture { selected = gen }
-                        }
-                    }.padding(16)
-                }
+                grid
             }
         }
         .background(Theme.bg)
-        .sheet(item: $selected) { gen in GenerationDetail(model: model, gen: gen) }
+        .sheet(item: $selected) { gen in
+            GenerationDetail(model: model, gen: gen)
+                #if os(macOS)
+                .frame(minWidth: 420, idealWidth: 480, minHeight: 520, idealHeight: 640)
+                #endif
+        }
+    }
+
+    // MARK: Empty state
+
+    private var emptyState: some View {
+        VStack(spacing: Theme.Space.md) {
+            Image(systemName: "photo.on.rectangle.angled")
+                .font(.system(size: 40, weight: .light))
+                .foregroundStyle(Theme.textSecondary)
+                .accessibilityHidden(true)
+            Text("Your generations appear here")
+                .font(.callout)
+                .foregroundStyle(Theme.textSecondary)
+                .multilineTextAlignment(.center)
+        }
+        .padding(Theme.Space.xl)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // The text alone conveys the state to VoiceOver; the icon is decorative.
+    }
+
+    // MARK: Grid
+
+    private var grid: some View {
+        ScrollView {
+            LazyVGrid(columns: columns, spacing: Theme.Space.sm) {
+                ForEach(model.history) { gen in
+                    Thumbnail(gen: gen) { selected = gen }
+                }
+            }
+            .padding(Theme.Space.lg)
+        }
     }
 }
 
+// MARK: - Thumbnail cell
+
+/// A single square library cell. The image is decorative (hidden from VoiceOver); the cell itself
+/// is the accessible, tappable button carrying a truncated prompt as its label.
+private struct Thumbnail: View {
+    let gen: Generation
+    let onTap: () -> Void
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var pressed = false
+
+    var body: some View {
+        Image(decorative: gen.image, scale: 1)
+            .resizable()
+            .aspectRatio(1, contentMode: .fill)
+            .frame(maxWidth: .infinity)
+            .clipped()
+            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.field, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: Theme.Radius.field, style: .continuous)
+                    .strokeBorder(Theme.hairline)
+            )
+            .scaleEffect(pressed && !reduceMotion ? 0.97 : 1)
+            .animation(Motion.press, value: pressed)
+            .contentShape(Rectangle())
+            // A manual press gesture gives the tactile scale while keeping a single tap action.
+            .onTapGesture { onTap() }
+            ._onPressGesture { pressed = $0 }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(label)
+            .accessibilityHint("Show details")
+            .accessibilityAddTraits(.isButton)
+    }
+
+    private var label: String {
+        let trimmed = gen.prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "Generated image" : String(trimmed.prefix(80))
+    }
+}
+
+private extension View {
+    /// Reports press state (down → `true`, up/cancel → `false`) without consuming the tap.
+    func _onPressGesture(_ action: @escaping (Bool) -> Void) -> some View {
+        simultaneousGesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { _ in action(true) }
+                .onEnded { _ in action(false) }
+        )
+    }
+}
+
+// MARK: - Generation detail
+
+/// The detail sheet for one generation: full image, prompt, a parameter table, "Reuse settings",
+/// and an export action. Reads/uses `AppModel` (reuse + export) but adds no model state.
 private struct GenerationDetail: View {
     @Bindable var model: AppModel
     let gen: Generation
     @Environment(\.dismiss) private var dismiss
 
+    #if os(macOS)
+    @State private var exporting = false
+    #endif
+
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                Image(decorative: gen.image, scale: 1).resizable().aspectRatio(contentMode: .fit)
-                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                Text(gen.prompt).font(.callout)
-                VStack(alignment: .leading, spacing: 8) {
-                    row("Model", gen.modelName)
-                    row("Size", "\(gen.size)×\(gen.size)")
-                    row("Steps", "\(gen.steps)")
-                    row("Seed", "\(gen.seed)")
-                }.studioCard()
-                Button { model.reuse(gen); dismiss() } label: {
-                    Label("Reuse settings", systemImage: "arrow.uturn.left").frame(maxWidth: .infinity)
-                }.buttonStyle(.borderedProminent).tint(Theme.accent)
+            VStack(alignment: .leading, spacing: Theme.Space.lg) {
+                header
+
+                Image(decorative: gen.image, scale: 1)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(maxWidth: .infinity)
+                    .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
+                            .strokeBorder(Theme.hairline)
+                    )
+                    .accessibilityLabel("Generated image")
+
+                prompt
+
+                params
+
+                actions
             }
-            .padding(20)
+            .padding(Theme.Space.xl)
+            .frame(maxWidth: 680)
+            .frame(maxWidth: .infinity)
         }
         .background(Theme.bg)
-        .preferredColorScheme(.dark)
+    }
+
+    // MARK: Header (title + close)
+
+    private var header: some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text("Generation")
+                .font(.title2.weight(.semibold))
+                .foregroundStyle(Theme.textPrimary)
+            Spacer(minLength: Theme.Space.md)
+            Button { dismiss() } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.title3)
+                    .foregroundStyle(Theme.textSecondary)
+                    .symbolRenderingMode(.hierarchical)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Close")
+        }
+    }
+
+    // MARK: Prompt
+
+    private var prompt: some View {
+        VStack(alignment: .leading, spacing: Theme.Space.xs) {
+            sectionHeader("PROMPT")
+            Text(gen.prompt)
+                .font(.callout)
+                .foregroundStyle(Theme.textPrimary)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    // MARK: Parameters
+
+    private var params: some View {
+        VStack(alignment: .leading, spacing: Theme.Space.xs) {
+            sectionHeader("DETAILS")
+            VStack(alignment: .leading, spacing: Theme.Space.sm) {
+                row("Model", gen.modelName)
+                row("Size", "\(gen.size)×\(gen.size)")
+                row("Steps", "\(gen.steps)")
+                row("Seed", "\(gen.seed)")
+                row("Created", gen.date.formatted(date: .abbreviated, time: .shortened))
+            }
+            .studioCard()
+        }
+    }
+
+    // MARK: Actions
+
+    private var actions: some View {
+        VStack(spacing: Theme.Space.sm) {
+            Button {
+                model.reuse(gen)
+                dismiss()
+            } label: {
+                Label("Reuse settings", systemImage: "arrow.uturn.left")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(StudioButtonStyle(.primary))
+            .accessibilityHint("Loads this prompt and settings into Create")
+
+            saveButton
+        }
+    }
+
+    @ViewBuilder private var saveButton: some View {
+        #if os(iOS)
+        Button { model.exportImage(gen.image) } label: {
+            Label("Save to Photos", systemImage: "square.and.arrow.down")
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(StudioButtonStyle(.secondary))
+        .accessibilityLabel("Save to Photos")
+        .accessibilityHint("Adds this image to your photo library")
+        #elseif os(macOS)
+        Button { exporting = true } label: {
+            Label("Export image…", systemImage: "square.and.arrow.down")
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(StudioButtonStyle(.secondary))
+        .accessibilityLabel("Export image")
+        .accessibilityHint("Saves this image as a PNG file")
+        .fileExporter(
+            isPresented: $exporting,
+            document: PNGDocument(data: model.pngData(gen.image)),
+            contentType: .png,
+            defaultFilename: exportFilename
+        ) { _ in }
+        #endif
+    }
+
+    #if os(macOS)
+    /// A stable, descriptive default filename for the save panel.
+    private var exportFilename: String {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd_HH-mm-ss"
+        return "MobileDiffuser_\(f.string(from: gen.date))"
+    }
+    #endif
+
+    // MARK: Pieces
+
+    private func sectionHeader(_ text: String) -> some View {
+        Text(text)
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(Theme.textTertiary)
+            .accessibilityHidden(true)
     }
 
     private func row(_ k: String, _ v: String) -> some View {
-        HStack { Text(k).foregroundStyle(.secondary); Spacer(); Text(v).monospacedDigit() }.font(.subheadline)
+        HStack(alignment: .firstTextBaseline) {
+            Text(k).foregroundStyle(Theme.textSecondary)
+            Spacer(minLength: Theme.Space.md)
+            Text(v)
+                .foregroundStyle(Theme.textPrimary)
+                .monospacedDigit()
+                .multilineTextAlignment(.trailing)
+        }
+        .font(.subheadline)
+        .accessibilityElement(children: .combine)
     }
 }
+
+#if os(macOS)
+/// Lightweight PNG wrapper for `.fileExporter`.
+private struct PNGDocument: FileDocument {
+    static var readableContentTypes: [UTType] { [.png] }
+    var data: Data
+    init(data: Data?) { self.data = data ?? Data() }
+    init(configuration: ReadConfiguration) throws {
+        data = configuration.file.regularFileContents ?? Data()
+    }
+    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
+        FileWrapper(regularFileWithContents: data)
+    }
+}
+#endif

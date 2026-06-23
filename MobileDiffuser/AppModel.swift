@@ -4,9 +4,16 @@
 
 import SwiftUI
 import CoreGraphics
+import ImageIO
+import UniformTypeIdentifiers
 import DiffusionCore
 import ZImageMLX
 import AppEngines   // re-exports Flux2DiffusionEngine on macOS only (empty on iOS)
+
+#if os(iOS)
+import UIKit
+import Photos
+#endif
 
 /// The four studio sections (Mac sidebar / iPhone tab bar).
 enum Tab: String, CaseIterable, Identifiable {
@@ -235,4 +242,29 @@ final class AppModel {
             throw AppError.unsupportedOnPlatform("\(model.displayName) is not supported yet.")
         }
     }
+
+    // MARK: - Image export
+
+    /// PNG bytes for a `CGImage`, used by the macOS save panel / `.fileExporter`. Cross-platform.
+    func pngData(_ cg: CGImage) -> Data? {
+        let data = NSMutableData()
+        guard let dest = CGImageDestinationCreateWithData(data, UTType.png.identifier as CFString, 1, nil) else { return nil }
+        CGImageDestinationAddImage(dest, cg, nil)
+        guard CGImageDestinationFinalize(dest) else { return nil }
+        return data as Data
+    }
+
+    #if os(iOS)
+    /// Save a generated image to the user's Photo library (add-only authorization). Denial is
+    /// non-fatal — the image stays in the in-app Library. iOS only; macOS uses a save panel in-view.
+    func exportImage(_ cg: CGImage) {
+        let image = UIImage(cgImage: cg)
+        PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
+            guard status == .authorized || status == .limited else { return }
+            PHPhotoLibrary.shared().performChanges {
+                PHAssetChangeRequest.creationRequestForAsset(from: image)
+            } completionHandler: { _, _ in }
+        }
+    }
+    #endif
 }
