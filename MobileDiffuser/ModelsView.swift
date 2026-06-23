@@ -71,10 +71,28 @@ struct ModelCard: View {
                 .font(.caption).foregroundStyle(Theme.textSecondary).lineLimit(2)
             HStack(spacing: Theme.Space.xs) {
                 Chip(text: m.family == .flux2 ? "FLUX.2" : "Z-Image")
+                #if os(macOS)
+                if m.family == .flux2 {
+                    Chip(text: model.fluxTransformer.label, filled: true)
+                    Chip(text: ByteCountFormatter.string(fromByteCount: model.fluxActiveBytes, countStyle: .file))
+                } else {
+                    Chip(text: m.variants[0].precision.label, filled: true)
+                    Chip(text: ByteCountFormatter.string(fromByteCount: m.variants[0].approximateBytes, countStyle: .file))
+                }
+                #else
                 Chip(text: m.variants[0].precision.label, filled: true)
                 Chip(text: ByteCountFormatter.string(fromByteCount: m.variants[0].approximateBytes, countStyle: .file))
+                #endif
                 Spacer()
             }
+            #if os(macOS)
+            if m.family == .flux2 {
+                // The active recipe + whether it's installed, so the Use/Download action is unambiguous.
+                Text("Active: \(model.fluxRecipeLabel) · \(model.isDownloaded(m) ? "installed" : "not installed")")
+                    .font(.caption2)
+                    .foregroundStyle(model.isDownloaded(m) ? Theme.fitGreen : Theme.textTertiary)
+            }
+            #endif
             ComponentBar(components: m.variants[0].components)
             HStack(spacing: Theme.Space.sm) {
                 ModelAction(model: model, m: m)
@@ -304,6 +322,12 @@ private struct ModelDetail: View {
                         .padding(.horizontal, 7).padding(.vertical, 2)
                         .background(badgeColor(c.kind).opacity(0.18), in: Capsule())
                         .foregroundStyle(badgeColor(c.kind))
+                    if model.fluxActiveComponentIDs.contains(c.id) {
+                        Text("Active").font(.caption2.weight(.medium))
+                            .padding(.horizontal, 7).padding(.vertical, 2)
+                            .background(Theme.fitGreen.opacity(0.18), in: Capsule())
+                            .foregroundStyle(Theme.fitGreen)
+                    }
                 }
                 if !c.subtitle.isEmpty {
                     Text(c.subtitle).font(.caption2).foregroundStyle(Theme.textTertiary)

@@ -135,6 +135,20 @@ final class AppModel {
         try? Flux2FacadeEngine.deleteComponent(id)
         componentsRevision += 1
     }
+
+    /// The component ids the currently-selected FLUX precision actually runs ("active recipe").
+    var fluxActiveComponentIDs: [String] {
+        Flux2FacadeEngine.activeComponentIDs(transformer: fluxTransformer, encoder: fluxEncoder)
+    }
+
+    /// Total download size of the active FLUX precision (for the card's size chip).
+    var fluxActiveBytes: Int64 {
+        let active = Set(fluxActiveComponentIDs)
+        return fluxComponents().filter { active.contains($0.id) }.reduce(0) { $0 + $1.bytes }
+    }
+
+    /// Short label of the active FLUX recipe, e.g. "8-bit · 4-bit encoder".
+    var fluxRecipeLabel: String { "\(fluxTransformer.label) · \(fluxEncoder.label) encoder" }
     #endif
 
     private let downloader: ModelDownloader

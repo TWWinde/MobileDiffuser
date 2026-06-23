@@ -29,7 +29,7 @@ enum Catalog {
         displayName: "FLUX.2 Klein (4B)",
         family: .flux2,
         publisher: "Black Forest Labs",
-        summary: "macOS · 4-bit · downloads on first run",
+        summary: "macOS · selectable precision · Qwen3-4B encoder",
         license: .apache2,
         architecture: ArchitectureSpec(family: .flux2, latentChannels: 16,
             defaultSampler: .flowMatchEuler, defaultSteps: 8, defaultGuidance: 1.0),
