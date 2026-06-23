@@ -56,3 +56,7 @@ coremlsd35/
 
 # Legacy preview models are too large for source control.
 MobileDiffuser/Preview Content/CoreMLModels/
+
+# Local code-signing config (your Team ID stays out of the repo).
+# Copy Signing.xcconfig.example -> Signing.xcconfig and fill in your team.
+Signing.xcconfig

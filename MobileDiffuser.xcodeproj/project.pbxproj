@@ -13,6 +13,7 @@
 
 /* Begin PBXFileReference section */
 		AABB15032F698F45007A3533 /* MobileDiffuser.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MobileDiffuser.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		DDEE0000000000000000C001 /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Signing.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -39,6 +40,7 @@
 		AABB14FA2F698F44007A3533 = {
 			isa = PBXGroup;
 			children = (
+				DDEE0000000000000000C001 /* Signing.xcconfig */,
 				AABB15052F698F45007A3533 /* MobileDiffuser */,
 				AABB15042F698F45007A3533 /* Products */,
 			);
@@ -259,6 +261,7 @@
 		};
 		AABB15122F698F46007A3533 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = DDEE0000000000000000C001 /* Signing.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
@@ -266,7 +269,6 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "\"MobileDiffuser/Preview Content\"";
-				DEVELOPMENT_TEAM = ;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -291,6 +293,7 @@
 		};
 		AABB15132F698F46007A3533 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = DDEE0000000000000000C001 /* Signing.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
@@ -298,7 +301,6 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "\"MobileDiffuser/Preview Content\"";
-				DEVELOPMENT_TEAM = ;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
