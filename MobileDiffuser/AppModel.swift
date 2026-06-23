@@ -10,6 +10,34 @@ import ZImageMLX
 import Flux2DiffusionEngine
 #endif
 
+/// The four studio sections (Mac sidebar / iPhone tab bar).
+enum Tab: String, CaseIterable, Identifiable {
+    case models, create, library, settings
+    var id: String { rawValue }
+    var title: String {
+        switch self { case .models: "Models"; case .create: "Create"; case .library: "Library"; case .settings: "Settings" }
+    }
+    var icon: String {
+        switch self {
+        case .models: "square.grid.2x2"; case .create: "wand.and.stars"
+        case .library: "photo.on.rectangle.angled"; case .settings: "gearshape"
+        }
+    }
+}
+
+/// One finished generation, kept in the Library (in-session for now).
+struct Generation: Identifiable {
+    let id = UUID()
+    let image: CGImage
+    let prompt: String
+    let modelID: String
+    let modelName: String
+    let size: Int
+    let steps: Int
+    let seed: UInt64
+    let date = Date()
+}
+
 /// Drives any catalog model through a `DiffusionEngine` facade (Z-Image and — on macOS — FLUX.2),
 /// with model switching. UI state lives on the main actor; the engines are actors, so their heavy
 /// MLX work runs off-main without blocking the UI. Z-Image weights are downloaded in-app first;
@@ -34,6 +62,8 @@ final class AppModel {
     }
 
     let models = Catalog.all
+    let device = DeviceTier.current
+    var tab: Tab = .create
     var selectedID: String = Catalog.all.first!.id
     var prompt = "a red panda on a mossy rock, soft morning light"
     var size = 1024
@@ -41,6 +71,7 @@ final class AppModel {
     var seedText = "42"
     var phase: Phase = .idle
     var image: CGImage?
+    var history: [Generation] = []
 
     private let downloader: ModelDownloader
     private var engine: (any DiffusionEngine)?
@@ -55,6 +86,9 @@ final class AppModel {
     }
 
     var selected: DiffusionModel { models.first { $0.id == selectedID } ?? models[0] }
+
+    /// Where downloaded models live (shown in Settings).
+    var storageLocation: String { downloader.downloadBase.appending(component: "models").path }
 
     /// In-app download applies to Z-Image; FLUX manages its own weights inside `load`.
     var managesOwnDownload: Bool { selected.family != .zImage }
@@ -136,8 +170,8 @@ final class AppModel {
             guard let engine, loadedID == model.id else { phase = .failed("Model not loaded"); return }
 
             phase = .generating(0, steps)
-            let request = GenerationRequest(prompt: prompt, steps: steps,
-                                            seed: UInt64(seedText) ?? 42,
+            let seed = UInt64(seedText) ?? 42
+            let request = GenerationRequest(prompt: prompt, steps: steps, seed: seed,
                                             size: ImageSize(width: size, height: size))
             let cgImage = try await engine.generate(request) { progress in
                 Task { @MainActor in
@@ -149,9 +183,43 @@ final class AppModel {
             }
             image = cgImage
             phase = .done
+            history.insert(Generation(image: cgImage, prompt: prompt, modelID: model.id,
+                                      modelName: model.displayName, size: size, steps: steps, seed: seed),
+                           at: 0)
         } catch {
             phase = .failed(String(describing: error))
         }
+    }
+
+    /// Hardware-fit for a catalog model on this device (drives the gallery's fit badges).
+    func capabilities(for model: DiffusionModel) -> EngineCapabilities {
+        let variant = model.variants[0]
+        switch model.family {
+        case .zImage:
+            return ZImageFacadeEngine.capabilities(for: model, variant: variant, on: device)
+        case .flux2:
+            #if os(macOS)
+            return Flux2FacadeEngine.capabilities(for: model, variant: variant, on: device)
+            #else
+            return EngineCapabilities(runnable: false, residency: .unsupported,
+                                      estimatedPeakBytes: variant.approximateBytes, note: "macOS only")
+            #endif
+        default:
+            return EngineCapabilities(runnable: false, residency: .unsupported,
+                                      estimatedPeakBytes: variant.approximateBytes, note: "Unsupported")
+        }
+    }
+
+    func isDownloaded(_ model: DiffusionModel) -> Bool {
+        guard model.family == .zImage else { return false }
+        return downloader.isDownloaded(repoId: model.variants[0].source.huggingFaceRepo)
+    }
+
+    /// Apply a past generation's settings and jump to Create.
+    func reuse(_ g: Generation) {
+        prompt = g.prompt; size = g.size; steps = g.steps; seedText = String(g.seed)
+        if models.contains(where: { $0.id == g.modelID }) { selectedID = g.modelID }
+        tab = .create
     }
 
     private func makeEngine(for model: DiffusionModel) throws -> any DiffusionEngine {
