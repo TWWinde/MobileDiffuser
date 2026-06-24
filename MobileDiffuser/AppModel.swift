@@ -53,7 +53,15 @@ struct Generation: Identifiable {
     let size: Int
     let steps: Int
     let seed: UInt64
+    let duration: TimeInterval
     let date = Date()
+}
+
+/// Format a generation time for display: "12.4s" under a minute, "1m 05s" above.
+func formatDuration(_ seconds: TimeInterval) -> String {
+    if seconds < 60 { return String(format: "%.1fs", seconds) }
+    let m = Int(seconds) / 60, s = Int(seconds) % 60
+    return "\(m)m \(String(format: "%02d", s))s"
 }
 
 /// Drives any catalog model through a `DiffusionEngine` facade (Z-Image and — on macOS — FLUX.2),
@@ -93,6 +101,9 @@ final class AppModel {
     /// Peak resident memory (phys_footprint, the value jetsam checks) seen during the last
     /// generation — surfaced on iPhone so the streaming residency is visible. 0 until a run happens.
     var peakResidentBytes: UInt64 = 0
+    /// Wall-clock time of the last completed generation (encode → denoise → decode), shown in the
+    /// status line and recorded with each Library entry.
+    var lastGenerationSeconds: TimeInterval?
     /// Bumped after any model/component download or delete so views re-read on-disk install state.
     private(set) var componentsRevision = 0
 
@@ -235,7 +246,7 @@ final class AppModel {
         case .downloading(let f): return "Downloading… \(Int(f * 100))%"
         case .loading(let f): return "Loading into memory… \(Int(f * 100))%"
         case .generating(let s, let t): return "Generating… step \(s)/\(t)"
-        case .done: return "Done"
+        case .done: return lastGenerationSeconds.map { "Done in \(formatDuration($0))" } ?? "Done"
         case .failed(let m): return "Failed: \(m)"
         }
     }
@@ -244,9 +255,9 @@ final class AppModel {
     /// streaming residency visible (does the 6B model stay under the jetsam ceiling?).
     var memoryReadout: String? {
         guard peakResidentBytes > 0 else { return nil }
-        let peak = ByteCountFormatter.string(fromByteCount: Int64(peakResidentBytes), countStyle: .memory)
-        let budget = ByteCountFormatter.string(fromByteCount: device.memoryBudgetBytes, countStyle: .memory)
-        return "peak \(peak) / \(budget) budget"
+        let peak = Double(peakResidentBytes) / 1_073_741_824
+        let budget = Double(device.memoryBudgetBytes) / 1_073_741_824
+        return String(format: "peak %.1f / %.1f GB", peak, budget)
     }
     func download() async {
         guard !inFlight else { return }
@@ -383,6 +394,12 @@ final class AppModel {
     /// Download the selected model's weights. No reentrancy guard — callers hold `inFlight`.
     private func downloadSelected() async {
         let model = selected
+        #if os(iOS)
+        // Keep the screen awake during the multi-GB download so a foreground URLSession isn't
+        // killed by auto-lock mid-transfer.
+        UIApplication.shared.isIdleTimerDisabled = true
+        defer { UIApplication.shared.isIdleTimerDisabled = false }
+        #endif
         do {
             phase = .downloading(0)
             switch model.family {
@@ -460,6 +477,7 @@ final class AppModel {
             let seed = UInt64(seedText) ?? 42
             let request = GenerationRequest(prompt: prompt, steps: steps, seed: seed,
                                             size: ImageSize(width: size, height: size))
+            let genStart = Date()
             let cgImage = try await engine.generate(request) { progress in
                 Task { @MainActor in
                     // Only advance while still generating, so a late callback can't revive a finished run.
@@ -468,10 +486,13 @@ final class AppModel {
                     }
                 }
             }
+            let elapsed = Date().timeIntervalSince(genStart)
+            lastGenerationSeconds = elapsed
             image = cgImage
             phase = .done
             history.insert(Generation(image: cgImage, prompt: prompt, modelID: model.id,
-                                      modelName: model.displayName, size: size, steps: steps, seed: seed),
+                                      modelName: model.displayName, size: size, steps: steps, seed: seed,
+                                      duration: elapsed),
                            at: 0)
         } catch {
             phase = .failed(String(describing: error))

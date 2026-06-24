@@ -226,6 +226,7 @@ private struct GenerationDetail: View {
                 row("Size", "\(gen.size)×\(gen.size)")
                 row("Steps", "\(gen.steps)")
                 row("Seed", "\(gen.seed)")
+                row("Time", formatDuration(gen.duration))
                 row("Created", gen.date.formatted(date: .abbreviated, time: .shortened))
             }
             .studioCard()

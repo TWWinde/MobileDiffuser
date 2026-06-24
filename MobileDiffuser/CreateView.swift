@@ -29,23 +29,31 @@ struct CreateView: View {
         .sheet(isPresented: $showModels) { ModelsSheet(model: model) }
     }
 
+    // Two rows so the status + memory readout get the full bar width and never truncate on a narrow
+    // iPhone: row 1 is the model identity (name + fit badge + disclosure), row 2 is live status.
     private var modelBar: some View {
         Button { showModels = true } label: {
-            HStack(spacing: Theme.Space.sm) {
-                Image(systemName: "cube.box.fill").foregroundStyle(Theme.accent)
-                Text(model.selected.displayName)
-                    .font(.subheadline.weight(.semibold)).foregroundStyle(Theme.textPrimary)
-                FitBadge(capabilities: model.capabilities(for: model.selected))
-                Spacer()
-                VStack(alignment: .trailing, spacing: 1) {
+            VStack(spacing: 4) {
+                HStack(spacing: Theme.Space.sm) {
+                    Image(systemName: "cube.box.fill").foregroundStyle(Theme.accent)
+                    Text(model.selected.displayName)
+                        .font(.subheadline.weight(.semibold)).foregroundStyle(Theme.textPrimary)
+                        .lineLimit(1)
+                    FitBadge(capabilities: model.capabilities(for: model.selected))
+                    Spacer(minLength: Theme.Space.sm)
+                    Image(systemName: "chevron.right").font(.caption2).foregroundStyle(Theme.textTertiary)
+                }
+                HStack(spacing: Theme.Space.sm) {
                     Text(model.statusText).font(.caption2)
-                        .foregroundStyle(model.isFailed ? Theme.danger : Theme.textSecondary).lineLimit(1)
+                        .foregroundStyle(model.isFailed ? Theme.danger : Theme.textSecondary)
+                        .lineLimit(1)
+                    Spacer(minLength: Theme.Space.sm)
                     if let memory = model.memoryReadout {
                         Text(memory).font(.caption2).monospacedDigit()
-                            .foregroundStyle(Theme.textTertiary).lineLimit(1)
+                            .foregroundStyle(Theme.textTertiary)
+                            .lineLimit(1)
                     }
                 }
-                Image(systemName: "chevron.right").font(.caption2).foregroundStyle(Theme.textTertiary)
             }
             .padding(.horizontal, Theme.Space.lg).padding(.vertical, Theme.Space.sm)
             .background(Theme.surface)
