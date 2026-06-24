@@ -90,6 +90,9 @@ final class AppModel {
     var phase: Phase = .idle
     var image: CGImage?
     var history: [Generation] = []
+    /// Peak resident memory (phys_footprint, the value jetsam checks) seen during the last
+    /// generation — surfaced on iPhone so the streaming residency is visible. 0 until a run happens.
+    var peakResidentBytes: UInt64 = 0
     /// Bumped after any model/component download or delete so views re-read on-disk install state.
     private(set) var componentsRevision = 0
 
@@ -237,7 +240,14 @@ final class AppModel {
         }
     }
 
-    /// Explicit download of the selected Z-Image model (no-op for self-managing families).
+    /// Peak memory of the last generation vs the device budget — shown on iPhone to make the
+    /// streaming residency visible (does the 6B model stay under the jetsam ceiling?).
+    var memoryReadout: String? {
+        guard peakResidentBytes > 0 else { return nil }
+        let peak = ByteCountFormatter.string(fromByteCount: Int64(peakResidentBytes), countStyle: .memory)
+        let budget = ByteCountFormatter.string(fromByteCount: device.memoryBudgetBytes, countStyle: .memory)
+        return "peak \(peak) / \(budget) budget"
+    }
     func download() async {
         guard !inFlight else { return }
         inFlight = true; defer { inFlight = false }
@@ -438,6 +448,15 @@ final class AppModel {
             guard let engine, loadedID == model.id else { phase = .failed("Model not loaded"); return }
 
             phase = .generating(0, steps)
+            // Sample peak resident memory across the run so the iPhone streaming residency is visible.
+            peakResidentBytes = 0
+            let memoryMonitor = Task { @MainActor in
+                while !Task.isCancelled {
+                    self.peakResidentBytes = max(self.peakResidentBytes, MemoryProbe.residentBytes())
+                    try? await Task.sleep(nanoseconds: 300_000_000)
+                }
+            }
+            defer { memoryMonitor.cancel() }
             let seed = UInt64(seedText) ?? 42
             let request = GenerationRequest(prompt: prompt, steps: steps, seed: seed,
                                             size: ImageSize(width: size, height: size))

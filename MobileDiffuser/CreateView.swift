@@ -37,8 +37,14 @@ struct CreateView: View {
                     .font(.subheadline.weight(.semibold)).foregroundStyle(Theme.textPrimary)
                 FitBadge(capabilities: model.capabilities(for: model.selected))
                 Spacer()
-                Text(model.statusText).font(.caption2)
-                    .foregroundStyle(model.isFailed ? Theme.danger : Theme.textSecondary).lineLimit(1)
+                VStack(alignment: .trailing, spacing: 1) {
+                    Text(model.statusText).font(.caption2)
+                        .foregroundStyle(model.isFailed ? Theme.danger : Theme.textSecondary).lineLimit(1)
+                    if let memory = model.memoryReadout {
+                        Text(memory).font(.caption2).monospacedDigit()
+                            .foregroundStyle(Theme.textTertiary).lineLimit(1)
+                    }
+                }
                 Image(systemName: "chevron.right").font(.caption2).foregroundStyle(Theme.textTertiary)
             }
             .padding(.horizontal, Theme.Space.lg).padding(.vertical, Theme.Space.sm)
