@@ -94,10 +94,13 @@ FLUX.2 Klein 4B builds and is wired up on iPhone alongside Z-Image.
 working set ≈ 3.3 GB, under an 8 GB phone's ~4 GB budget); **1024 is tight** (double-stream activations
 push toward ~4.3 GB) and needs empirical confirmation.
 
-**Remaining validation:** because 4-bit now uses the same pre-quantized path on Mac, the load can be
-validated on a Mac first — pick FLUX.2 Klein at 4-bit, download (2.18 GB), and run a 512 text2img,
-confirming a coherent (non-posterized) image. Then the on-device gate: the same on a real iPhone,
-checking the peak via `MemoryProbe`, and probe 1024.
+**Validation:** the pre-quantized 4-bit path is **confirmed on Mac (2026-06-24)** — downloaded the
+2.18 GB checkpoint, loaded with zero `notFound`/OOM (the strict load-path checks would otherwise
+throw), and generated a clean, coherent 512 text2img in 4 steps (no posterization), proving the 4-bit
+key mapping + quantize-shell-then-update numerics. Since 4-bit runs the **same** path on iPhone, the
+only remaining unknown is memory: the on-device gate is to run the same 512 on a real iPhone and check
+the peak via `MemoryProbe`, then probe 1024. (Note: `swift run` can't find MLX's `default.metallib` —
+run via an xcodebuild-built bundle, or copy `mlx-swift_Cmlx.bundle` next to the binary.)
 
 **Later (Phase 2):** block streaming for FLUX (the per-block `WeightSource` ranged-read ladder Z-Image
 uses) — only needed for 1024 full-res headroom and larger variants (Klein 9B); peak would drop to
