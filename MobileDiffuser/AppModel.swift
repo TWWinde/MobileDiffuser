@@ -418,8 +418,14 @@ final class AppModel {
                     await previous.unload()
                 }
                 let built = try makeEngine(for: model)
+                // The streaming Z-Image engine needs the real per-component source (it reads weights
+                // through it); the resident facades ignore `source` and self-resolve their weights,
+                // so they get a cheap empty placeholder.
+                let source: WeightSource = (model.family == .zImage && zImageUsesStreaming)
+                    ? try zImageSource(for: model, streaming: true)
+                    : SafetensorsWeightSource(tensors: [:])
                 phase = .loading(0)
-                try await built.load(model, variant: model.variants[0], source: SafetensorsWeightSource(tensors: [:])) { fraction in
+                try await built.load(model, variant: model.variants[0], source: source) { fraction in
                     Task { @MainActor in if case .loading = self.phase { self.phase = .loading(fraction) } }
                 }
                 engine = built
@@ -458,6 +464,13 @@ final class AppModel {
         let variant = model.variants[0]
         switch model.family {
         case .zImage:
+            // The fit badge must match what actually runs. On iPhone Z-Image runs through the
+            // block-streaming MLXDiffusionEngine (residency .streamingInternal, ~3 GB peak), so report
+            // that plan — not the resident facade's ~7.9 GB peak, which would show "unsupported".
+            // Mac stays on the resident facade (the path that runs there).
+            if zImageUsesStreaming {
+                return MLXDiffusionEngine.capabilities(for: model, variant: variant, on: device)
+            }
             return ZImageFacadeEngine.capabilities(for: model, variant: variant, on: device)
         case .flux2:
             #if os(macOS)
@@ -518,9 +531,27 @@ final class AppModel {
         tab = .create
     }
 
+    /// Z-Image runs the block-streaming `MLXDiffusionEngine` on iPhone (partial-load, ~3 GB peak)
+    /// and stays on the resident `ZImageFacadeEngine` on Mac (it already produces correct images).
+    private var zImageUsesStreaming: Bool { device.isPhone }
+
+    /// Build the `WeightSource` a streaming Z-Image engine consumes: a `ZImageComponentSource`
+    /// opened over the downloaded model folder. `streaming` opens the transformer via
+    /// `RangedFileWeightSource` (pread on demand, frees on release). The resident facade ignores
+    /// `source`, so this is only built for the streaming path.
+    private func zImageSource(for model: DiffusionModel, streaming: Bool) throws -> WeightSource {
+        let dir = downloader.localURL(repoId: model.variants[0].source.huggingFaceRepo)
+        return try ZImageComponentSource.open(modelDirectory: dir, streaming: streaming)
+    }
+
     private func makeEngine(for model: DiffusionModel) throws -> any DiffusionEngine {
         switch model.family {
         case .zImage:
+            if zImageUsesStreaming {
+                // iPhone partial-load path: the generic MLX engine drives ZImageArchitecture,
+                // loading/releasing each transformer block per step from the streaming source.
+                return MLXDiffusionEngine(architecture: ZImageArchitecture(), device: device)
+            }
             let dir = downloader.localURL(repoId: model.variants[0].source.huggingFaceRepo)
             return ZImageFacadeEngine(modelDirectory: dir)
         case .flux2:
