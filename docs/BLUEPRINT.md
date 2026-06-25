@@ -94,13 +94,15 @@ FLUX.2 Klein 4B builds and is wired up on iPhone alongside Z-Image.
 working set ≈ 3.3 GB, under an 8 GB phone's ~4 GB budget); **1024 is tight** (double-stream activations
 push toward ~4.3 GB) and needs empirical confirmation.
 
-**Validation:** the pre-quantized 4-bit path is **confirmed on Mac (2026-06-24)** — downloaded the
-2.18 GB checkpoint, loaded with zero `notFound`/OOM (the strict load-path checks would otherwise
-throw), and generated a clean, coherent 512 text2img in 4 steps (no posterization), proving the 4-bit
-key mapping + quantize-shell-then-update numerics. Since 4-bit runs the **same** path on iPhone, the
-only remaining unknown is memory: the on-device gate is to run the same 512 on a real iPhone and check
-the peak via `MemoryProbe`, then probe 1024. (Note: `swift run` can't find MLX's `default.metallib` —
-run via an xcodebuild-built bundle, or copy `mlx-swift_Cmlx.bundle` next to the binary.)
+**Validation — done, both platforms.** Mac (2026-06-24): downloaded the 2.18 GB checkpoint, loaded
+with zero `notFound`/OOM, generated a clean 512 text2img in 4 steps — proving the 4-bit key mapping +
+quantize-shell-then-update numerics. **iPhone 16 Pro (2026-06-25): PASSED** — FLUX.2 Klein 4B, 512px,
+4 steps, small decoder, **two-phase, peak 4.3 GB, ~1m11s, clean image**. Two empirical notes: the real
+4.3 GB peak runs **higher than the facade's `capabilities()` estimate (~3.3 GB)** — the working-set
+constant under-predicts; and 4.3 GB exceeded the conservative ~4 GB (50%-of-RAM) budget yet iOS did not
+jetsam, so there is real foreground headroom beyond that budget. **512 is confirmed safe; 1024 stays
+cautious** (activations scale ~4×), which is why the standard VAE is gated to ≤512 on iPhone. (Mac CLI
+note: `swift run` can't find MLX's `default.metallib` — copy `mlx-swift_Cmlx.bundle` next to the binary.)
 
 **Later (Phase 2):** block streaming for FLUX (the per-block `WeightSource` ranged-read ladder Z-Image
 uses) — only needed for 1024 full-res headroom and larger variants (Klein 9B); peak would drop to
