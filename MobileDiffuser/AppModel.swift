@@ -110,6 +110,7 @@ final class AppModel {
     var selectedID: String = Catalog.all.first!.id {
         didSet {
             guard selectedID != oldValue else { return }
+            UserDefaults.standard.set(selectedID, forKey: "selectedModelID")   // survive relaunch
             applyModelDefaults()   // each model has its own native step count + size
         }
     }
@@ -265,7 +266,14 @@ final class AppModel {
             for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
         let base = (support ?? URL(fileURLWithPath: NSTemporaryDirectory())).appending(component: "MobileDiffuser")
         downloader = ModelDownloader(downloadBase: base)
-        applyModelDefaults()   // steps + size default to the initial model's native values
+        // Restore the last-selected model BEFORE applying its defaults. An assignment inside init does
+        // not fire the `didSet`, so set it directly and let the explicit applyModelDefaults() below pick
+        // up the restored selection (validate it still exists in the catalog).
+        if let raw = UserDefaults.standard.string(forKey: "selectedModelID"),
+           models.contains(where: { $0.id == raw }) {
+            selectedID = raw
+        }
+        applyModelDefaults()   // steps + size default to the selected model's native values
         if let raw = UserDefaults.standard.string(forKey: "appearance"), let theme = AppTheme(rawValue: raw) {
             appearance = theme   // set in init: didSet does not fire, so no redundant write-back
         }
