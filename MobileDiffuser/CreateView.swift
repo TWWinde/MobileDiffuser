@@ -71,12 +71,13 @@ struct HeroCanvas: View {
     @Bindable var model: AppModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    private enum CanvasState { case generating(Int, Int), pausing(Int, Int), paused(Int, Int), loading, result(CGImage), empty }
+    private enum CanvasState { case generating(Int, Int), pausing(Int, Int), paused(Int, Int), cooling(Int, Int), loading, result(CGImage), empty }
 
     private var state: CanvasState {
         if case .generating(let s, let t) = model.phase { return .generating(s, t) }
         if case .pausing(let s, let t) = model.phase { return .pausing(s, t) }
         if case .paused(let s, let t) = model.phase { return .paused(s, t) }
+        if case .cooling(let s, let t) = model.phase { return .cooling(s, t) }
         if case .downloading = model.phase { return .loading }
         if case .loading = model.phase { return .loading }
         if let cg = model.image { return .result(cg) }
@@ -99,6 +100,9 @@ struct HeroCanvas: View {
                 placeholder(icon: "pause.circle", pulsing: true, text: "Pausing after step \(s)/\(t)…")
             case .paused(let s, let t):
                 placeholder(icon: "pause.circle.fill", pulsing: false, text: "Paused at step \(s)/\(t)")
+            case .cooling(let s, let t):
+                placeholder(icon: "thermometer.snowflake", pulsing: true,
+                            text: "Cooling to protect your phone… (step \(s)/\(t))")
             case .loading:
                 placeholder(icon: loadingIcon, pulsing: true, text: model.statusText)
             case .empty:
@@ -189,7 +193,7 @@ struct HeroCanvas: View {
 
     private var generationProgress: (step: Int, total: Int)? {
         switch model.phase {
-        case .generating(let s, let t), .pausing(let s, let t), .paused(let s, let t):
+        case .generating(let s, let t), .pausing(let s, let t), .paused(let s, let t), .cooling(let s, let t):
             return (s, t)
         default:
             return nil

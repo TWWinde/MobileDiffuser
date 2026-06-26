@@ -114,6 +114,9 @@ final class AppModel {
         case generating(Int, Int)
         case pausing(Int, Int)
         case paused(Int, Int)
+        /// Auto-paused to let the device cool. NOT a failure — it resumes on its own once the phone
+        /// cools. Carries the step it paused at so the UI keeps the progress context.
+        case cooling(Int, Int)
         case cancelling
         case cancelled
         case done
@@ -371,7 +374,7 @@ final class AppModel {
     var isDownloaded: Bool { isDownloaded(selected) }
 
     var isBusy: Bool {
-        switch phase { case .downloading, .loading, .generating, .pausing, .paused, .cancelling: return true; default: break }
+        switch phase { case .downloading, .loading, .generating, .pausing, .paused, .cooling, .cancelling: return true; default: break }
         if fluxComponentDownloadID != nil { return true }   // a per-component install is in flight
         return false
     }
@@ -385,6 +388,7 @@ final class AppModel {
         case .generating(let s, let t): return "Generating… step \(s)/\(t)"
         case .pausing(let s, let t): return "Pausing after step \(s)/\(t)…"
         case .paused(let s, let t): return "Paused at step \(s)/\(t)"
+        case .cooling(let s, let t): return "Cooling to protect your phone… (step \(s)/\(t))"
         case .cancelling: return "Cancelling…"
         case .cancelled: return "Cancelled"
         case .done: return lastGenerationSeconds.map { "Done in \(formatDuration($0))" } ?? "Done"
@@ -499,7 +503,9 @@ final class AppModel {
     }
 
     var canPauseGeneration: Bool {
-        switch phase { case .generating, .pausing, .paused: return true; default: return false }
+        // Includes .cooling so the cancel/control cluster stays visible while auto-paused for heat —
+        // the user can still cancel (the governor's cooling wait is cancellation-aware).
+        switch phase { case .generating, .pausing, .paused, .cooling: return true; default: return false }
     }
 
     var isGenerationPaused: Bool {
@@ -783,14 +789,28 @@ final class AppModel {
                 cgImage = try await currentEngine.generate(request) { progress in
                     Task { @MainActor in
                         // Only advance while still generating, so a late callback can't revive a finished run.
-                        if self.activeOperationID == operationID,
-                           case .denoising(let step, let total, _) = progress {
+                        guard self.activeOperationID == operationID else { return }
+                        switch progress {
+                        case .denoising(let step, let total, _):
+                            // A denoise step after a cooling pause means the device cooled and the run
+                            // auto-resumed — leave .cooling and reflect live progress again.
                             switch self.phase {
-                            case .generating, .pausing, .paused:
+                            case .generating, .pausing, .paused, .cooling:
                                 self.phase = control.isPaused ? .paused(step, total) : .generating(step, total)
                             default:
                                 break
                             }
+                        case .cooling:
+                            // Carry the last known step into the cooling phase so progress context survives.
+                            switch self.phase {
+                            case .generating(let s, let t), .pausing(let s, let t),
+                                 .paused(let s, let t), .cooling(let s, let t):
+                                self.phase = .cooling(s, t)
+                            default:
+                                break
+                            }
+                        default:
+                            break
                         }
                     }
                 }
@@ -819,6 +839,13 @@ final class AppModel {
             guard activeOperationID == operationID else { return }
             phase = .cancelled
             showToast("Cancelled")
+        } catch EngineError.pausedForHeat {
+            // The device stayed too hot past the cooling window. This is recoverable, not a failure:
+            // return to idle and invite a retry once it cools, rather than showing a scary error.
+            await unloadOneShotStreamingEngineIfNeeded(for: model)
+            guard activeOperationID == operationID else { return }
+            phase = .idle
+            showToast("Paused to let your phone cool — try again in a moment")
         } catch {
             await unloadOneShotStreamingEngineIfNeeded(for: model)
             guard activeOperationID == operationID else { return }
