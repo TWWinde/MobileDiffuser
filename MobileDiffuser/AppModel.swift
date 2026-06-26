@@ -252,7 +252,7 @@ final class AppModel {
         if fluxActiveComponentIDs.contains(id),
            let loaded = models.first(where: { $0.id == loadedID }), loaded.family == .flux2,
            let current = engine {
-            engine = nil; loadedID = nil; loadedRecipe = nil
+            engine = nil; loadedID = nil; loadedRecipe = nil; loadedFluxStreaming = nil
             await current.unload()
         }
         try? Flux2FacadeEngine.deleteComponent(id)
@@ -298,6 +298,7 @@ final class AppModel {
     private var engine: (any DiffusionEngine)?
     private var loadedID: String?
     private var loadedRecipe: String?   // FLUX: the active recipe label that's loaded, for reload-on-precision-change
+    private var loadedFluxStreaming: Bool?   // FLUX: whether the loaded engine is the streaming (1024) one, for reload-on-size-cross
     private var inFlight = false   // reentrancy lock: one download/generate at a time
     @ObservationIgnored private var generationTask: Task<Void, Never>?
     @ObservationIgnored private var operationTask: Task<Void, Never>?
@@ -576,7 +577,7 @@ final class AppModel {
         guard !inFlight else { return }
         inFlight = true; defer { inFlight = false }
         if loadedID == model.id, let current = engine {
-            engine = nil; loadedID = nil; loadedRecipe = nil
+            engine = nil; loadedID = nil; loadedRecipe = nil; loadedFluxStreaming = nil
             await current.unload()
         }
         switch model.family {
@@ -737,21 +738,33 @@ final class AppModel {
 
             // Reload when the model changed OR (FLUX) the chosen precision recipe changed.
             var needsReload = engine == nil || loadedID != model.id
-            if model.family == .flux2, loadedRecipe != fluxRecipeLabel { needsReload = true }
+            if model.family == .flux2 {
+                if loadedRecipe != fluxRecipeLabel { needsReload = true }
+                // 512 (resident facade) and 1024 (streaming engine) are different engines — rebuild
+                // when the requested size crosses the boundary.
+                if loadedFluxStreaming != fluxUsesStreaming { needsReload = true }
+            }
             if needsReload {
                 // Unload the previous engine BEFORE loading the new one, so two large weight sets
                 // are never resident at once (a model switch would otherwise peak ~10+ GB).
                 if let previous = engine {
-                    engine = nil; loadedID = nil; loadedRecipe = nil
+                    engine = nil; loadedID = nil; loadedRecipe = nil; loadedFluxStreaming = nil
                     await previous.unload()
                 }
                 let built = try makeEngine(for: model)
                 // The streaming Z-Image engine needs the real per-component source (it reads weights
                 // through it); the resident facades ignore `source` and self-resolve their weights,
                 // so they get a cheap empty placeholder.
-                let source: WeightSource = (model.family == .zImage && zImageUsesStreaming)
-                    ? try zImageSource(for: model, streaming: true)
-                    : SafetensorsWeightSource(tensors: [:])
+                let source: WeightSource
+                if model.family == .zImage && zImageUsesStreaming {
+                    source = try zImageSource(for: model, streaming: true)
+                } else if model.family == .flux2 && fluxUsesStreaming {
+                    // The streaming FLUX engine reads the transformer through this source; the encoder
+                    // and VAE load resident from their own caches.
+                    source = try Flux2ComponentSource.openKlein4BStreaming()
+                } else {
+                    source = SafetensorsWeightSource(tensors: [:])
+                }
                 phase = .loading(0)
                 try await built.load(model, variant: model.variants[0], source: source) { fraction in
                     Task { @MainActor in
@@ -763,6 +776,7 @@ final class AppModel {
                 engine = built
                 loadedID = model.id
                 loadedRecipe = (model.family == .flux2) ? fluxRecipeLabel : nil
+                loadedFluxStreaming = (model.family == .flux2) ? fluxUsesStreaming : nil
             }
             // Ensure the loaded engine is actually the selected model (a failed switch leaves none).
             guard loadedID == model.id, engine != nil else { phase = .failed("Model not loaded"); return }
@@ -960,12 +974,17 @@ final class AppModel {
     /// and stays on the resident `ZImageFacadeEngine` on Mac (it already produces correct images).
     private var zImageUsesStreaming: Bool { device.isPhone }
 
+    /// FLUX: 1024 streams the transformer block-by-block (the only way it fits an iPhone); 512 stays on
+    /// the fast, validated resident facade. macOS always runs the resident facade.
+    private var fluxUsesStreaming: Bool { device.isPhone && size > 512 }
+
     private func unloadOneShotStreamingEngineIfNeeded(for model: DiffusionModel) async {
         guard model.family == .zImage, zImageUsesStreaming, loadedID == model.id,
               let current = engine else { return }
         engine = nil
         loadedID = nil
         loadedRecipe = nil
+        loadedFluxStreaming = nil
         await current.unload()
     }
 
@@ -989,6 +1008,13 @@ final class AppModel {
             let dir = downloader.localURL(repoId: model.variants[0].source.huggingFaceRepo)
             return ZImageFacadeEngine(modelDirectory: dir)
         case .flux2:
+            if fluxUsesStreaming {
+                // iPhone 1024: the generic MLX engine drives Flux2Architecture, streaming each of the
+                // 25 transformer blocks per step from the component source (encoder + VAE load resident
+                // from their own caches). 512 falls through to the resident facade below.
+                return MLXDiffusionEngine(architecture: Flux2Architecture(vaeVariant: fluxDecoder.vae),
+                                          device: device)
+            }
             return Flux2FacadeEngine(transformer: fluxTransformer, encoder: fluxEncoder, decoder: fluxDecoder)
         default:
             throw AppError.unsupportedOnPlatform("\(model.displayName) is not supported yet.")
