@@ -728,6 +728,18 @@ final class AppModel {
 
     private func runGenerate(control: GenerationControl, operationID: UUID) async {
         let model = selected
+        // Thermal start-gate: refuse to BEGIN a heavy run (iPhone 1024 FLUX block-streaming) while the
+        // device is already hot. The per-step throttle can only slow a run that's underway; the first
+        // .serious flip in a short denoise lands too late to keep a warm-start run off a thermal
+        // shutdown. Only the heavy path is gated — `fluxUsesStreaming` is `device.isPhone && size > 512`,
+        // so Mac (isPhone false) and the resident 512 facade never trip it; shouldDeferHeavyStart() is
+        // additionally a compile-time `false` on macOS. Recoverable, not a failure: fall back to idle and
+        // invite a retry once the phone cools, mirroring the EngineError.pausedForHeat recovery.
+        if model.family == .flux2, fluxUsesStreaming, ThermalGovernor.shared.shouldDeferHeavyStart() {
+            phase = .idle
+            showToast("Your phone is warm — let it cool a moment before a 1024 render")
+            return
+        }
         do {
             // Ensure the selected model's active recipe is on disk before loading (all families).
             if !isDownloaded(model) {
@@ -881,8 +893,15 @@ final class AppModel {
             }
             return ZImageFacadeEngine.capabilities(for: model, variant: variant, on: device)
         case .flux2:
-            // The facade is phone-aware: Mac → resident, iPhone → two-phase with the pre-quantized
-            // 4-bit checkpoint, gated against the device's memory budget.
+            // The badge must match the engine the router builds for the CURRENT size. iPhone 1024
+            // streams the transformer (MLXDiffusionEngine, measured 3.83 GB) — reporting the resident
+            // facade's heavier two-phase plan would wrongly show "needs more memory" for a render that
+            // actually fits. So mirror the router: streaming capabilities sized to this render for the
+            // 1024 iPhone path, the phone-aware resident facade for 512 / Mac.
+            if fluxUsesStreaming {
+                return MLXDiffusionEngine.capabilities(for: model, variant: variant, on: device,
+                                                       imageSeqLen: (size / 16) * (size / 16))
+            }
             return Flux2FacadeEngine.capabilities(for: model, variant: variant, on: device)
         default:
             return EngineCapabilities(runnable: false, residency: .unsupported,
@@ -1012,8 +1031,12 @@ final class AppModel {
                 // iPhone 1024: the generic MLX engine drives Flux2Architecture, streaming each of the
                 // 25 transformer blocks per step from the component source (encoder + VAE load resident
                 // from their own caches). 512 falls through to the resident facade below.
+                // Pass the target image token count ((W/16)·(H/16)) so load()'s residency plan sizes the
+                // activation working set to THIS render (1024 px = 4096 tokens) — selecting the explicit
+                // low-peak streamingInternal path instead of the 512-reference resident plan.
                 return MLXDiffusionEngine(architecture: Flux2Architecture(vaeVariant: fluxDecoder.vae),
-                                          device: device)
+                                          device: device,
+                                          targetImageSeqLen: (size / 16) * (size / 16))
             }
             return Flux2FacadeEngine(transformer: fluxTransformer, encoder: fluxEncoder, decoder: fluxDecoder)
         default:
