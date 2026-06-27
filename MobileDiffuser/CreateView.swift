@@ -115,29 +115,26 @@ struct HeroCanvas: View {
                 }
             }
         }
-        // Progress rail renders over the result image too, so progress stays visible.
+        // Controls float over the canvas. No step progress bar here — the top model bar shows the
+        // step and the live latent preview shows the image forming, so a rail on the image is noise.
         .overlay(alignment: .bottom) {
-            if let progress = generationProgress {
-                VStack(spacing: Theme.Space.sm) {
-                    ProgressView(value: Double(progress.step), total: Double(progress.total))
-                        .tint(Theme.accent)
-                    HStack(spacing: Theme.Space.sm) {
-                        Button { model.isGenerationPaused ? model.resumeGeneration() : model.pauseGeneration() } label: {
-                            Image(systemName: model.isGenerationPaused ? "play.fill" : "pause.fill")
-                                .frame(width: 32, height: 32)
-                        }
-                        .buttonStyle(.plain)
-                        .background(Theme.surface2, in: Circle())
-                        .accessibilityLabel(model.isGenerationPaused ? "Resume generation" : "Pause generation")
-
-                        Button { model.cancelOperation() } label: {
-                            Image(systemName: "xmark")
-                                .frame(width: 32, height: 32)
-                        }
-                        .buttonStyle(.plain)
-                        .background(Theme.surface2, in: Circle())
-                        .accessibilityLabel("Cancel generation")
+            if generationProgress != nil {
+                HStack(spacing: Theme.Space.sm) {
+                    Button { model.isGenerationPaused ? model.resumeGeneration() : model.pauseGeneration() } label: {
+                        Image(systemName: model.isGenerationPaused ? "play.fill" : "pause.fill")
+                            .frame(width: 32, height: 32)
                     }
+                    .buttonStyle(.plain)
+                    .background(Theme.surface2, in: Circle())
+                    .accessibilityLabel(model.isGenerationPaused ? "Resume generation" : "Pause generation")
+
+                    Button { model.cancelOperation() } label: {
+                        Image(systemName: "xmark")
+                            .frame(width: 32, height: 32)
+                    }
+                    .buttonStyle(.plain)
+                    .background(Theme.surface2, in: Circle())
+                    .accessibilityLabel("Cancel generation")
                 }
                 .padding(Theme.Space.lg)
             } else if model.isBusy, case .downloading(let fraction) = model.phase {
@@ -212,19 +209,13 @@ struct HeroCanvas: View {
     }
 
     /// During a run: show the cheap latent preview (the image visibly forming) when the architecture
-    /// provides one, with a small status chip on top; otherwise the icon placeholder. The bottom
-    /// progress rail + pause/cancel controls render over this either way, so progress stays visible.
+    /// provides one; otherwise the icon placeholder. The step/status text lives in the top model bar,
+    /// so no chip on the image; the pause/cancel controls float at the bottom.
     @ViewBuilder
     private func forming(icon: String, pulsing: Bool, text: String) -> some View {
         if let preview = model.previewImage {
             Image(decorative: preview, scale: 1).resizable().aspectRatio(contentMode: .fit)
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.canvas, style: .continuous))
-                .overlay(alignment: .top) {
-                    Text(text).font(.caption).foregroundStyle(.white)
-                        .padding(.horizontal, Theme.Space.md).padding(.vertical, Theme.Space.sm)
-                        .background(.black.opacity(0.4), in: Capsule())
-                        .padding(.top, Theme.Space.md)
-                }
         } else {
             placeholder(icon: icon, pulsing: pulsing, text: text)
         }
