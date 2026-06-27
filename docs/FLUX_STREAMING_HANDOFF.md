@@ -14,7 +14,32 @@ swift run flux2-demo --parity --stream   # per-step block-STREAMING vs facade �
 
 Both are **bit-identical** to the resident facade at 512. The forced-streaming run exercises the exact
 load→run→release→clearCache path the iPhone uses at 1024, so the on-device *mechanics* are validated;
-only the *physics* (thermal/memory at 1024) remain to test on-device.
+only the *physics* (thermal at 1024) remain to test on-device.
+
+---
+
+## ✅ 1024 MEMORY IS SOLVED (2026-06-27) — end-to-end peak 3.83 GB, parity bit-identical
+
+`swift run flux2-demo --parity --size 1024 --stream` → **MLX peak 3.83 GB, `maxPixelDiff=0 PSNR=inf PASS ✅`.**
+That 3.83 GB is *lower* than the 4.3 GB the working 512 path peaks at on-device (512 runs resident and
+holds all weights; 1024 streams and releases blocks as it goes). So **native 1024 should fit an 8 GB
+iPhone** — pending only the on-device confirm.
+
+The earlier "1024 VAE decode is a 10 GB hard wall" was a **measurement artifact**: the profiler held the
+full resident transformer (~2.5 GB) + text encoder (~2 GB) alive *through* the decode. The real path
+frees both first. True decode-only peak: **full-frame 5.62 GB** (just over the ~5.5 GB iPhone budget —
+*this is the "crashed at the last step" the user saw*) → **conv-striped 4.28 GB** (under budget).
+
+**The fix — conv striping** (`flux-2-swift-mlx@main`, `VAEDecoder.decodeConv`/`stripedConv`, ON by
+default). The decode peak is a single high-res 3×3 conv (im2col), not accumulation, so eval granularity
+couldn't shrink it. The heavy (≥512²) decoder convs now run in ~128-row horizontal **strips with a
+1-row halo** — EXACT (the 3×3 receptive field reaches exactly 1 row out; true image edges keep the
+conv's own zero-pad → bit-identical bar fp16 rounding, measured maxΔ 1/255). **Seam-free** because
+GroupNorm stays full-frame (its global spatial stats are what spatial *tiling* seams on; striping only
+splits the spatially-local convs). Both facade and streaming decode share the striped `VAEDecoder`, so
+parity stays bit-identical. `swift run flux2-demo --tile` measures it (full-frame vs striped peak +
+exactness). Spatial tiling (`decodeWithTiling`) is **abandoned** — 6.5 GB *and* 24 dB seams; striping
+supersedes it.
 
 ---
 
