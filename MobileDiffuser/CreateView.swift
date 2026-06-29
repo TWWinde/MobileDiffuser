@@ -232,6 +232,7 @@ struct PromptBar: View {
     #if os(macOS)
     @State private var showImporter = false                   // macOS: Finder file picker
     #endif
+    @FocusState private var promptFocused: Bool               // so tapping Generate can dismiss the keyboard
 
     var body: some View {
         VStack(spacing: Theme.Space.md) {
@@ -241,13 +242,14 @@ struct PromptBar: View {
                     .textFieldStyle(.plain)
                     .lineLimit(1...4)
                     .foregroundStyle(Theme.textPrimary)
+                    .focused($promptFocused)
                     .padding(Theme.Space.md)
                     .background(Theme.surface2, in: RoundedRectangle(cornerRadius: Theme.Radius.field, style: .continuous))
                     .overlay(RoundedRectangle(cornerRadius: Theme.Radius.field, style: .continuous).strokeBorder(Theme.hairline))
 
                 if model.selected.family == .flux2 && model.supportsReferenceImages && model.referenceImages.isEmpty { attachButton }   // empty-state first-add (Mac-only)
 
-                Button { model.startGenerate() } label: {
+                Button { promptFocused = false; model.startGenerate() } label: {   // dismiss the keyboard on send
                     Image(systemName: "arrow.up").font(.headline)
                         .foregroundStyle(Theme.onAccent)
                         .frame(width: 44, height: 44)
