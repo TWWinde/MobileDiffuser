@@ -82,6 +82,11 @@ The 4-bit transformer path uses the pre-quantized checkpoint. It must load
 packed 4-bit weights directly, not bf16 weights followed by load-time
 quantization.
 
+The decoder component is also the VAE *encoder* used by image-to-image:
+reference images are VAE-encoded into conditioning tokens, and that encode runs
+on whichever decoder checkpoint is installed. On iPhone the small decoder file
+supplies that encoder, so no extra download is needed for i2i.
+
 ## Building the App
 
 Set local signing without committing your Team ID:
@@ -205,12 +210,30 @@ Z-Image Turbo:
 FLUX.2 Klein:
   iPhone 16 Pro
   4-bit transformer, 4-bit encoder, small decoder
-  512px, 4 steps
-  about 4.3 GB peak, about 1m11s
+
+  text-to-image 512px, 4 steps
+    resident facade
+    about 4.3 GB peak, about 1m11s
+
+  text-to-image 1024px
+    block-streaming transformer (one block resident at a time)
+    conv-striped VAE decode (seam-free, bit-exact)
+    about 3.83 GB peak, about 4m22s
+
+  image-to-image 512px (reference-context, single 512x512 reference)
+    block-streaming transformer
+    about 3.45 GB peak, about 1m49s
 ```
 
-1024px on iPhone should be treated as experimental, especially with the FLUX
-standard VAE.
+Image-to-image on iPhone is reference-context: 1-3 references on macOS, a single
+512x512 reference on iPhone. There is no strength slider; the output denoises
+from pure noise while attending to the reference. The iPhone path streams the
+transformer so the reference VAE is freed before the transformer runs; higher
+i2i output resolution and multi-reference i2i on iPhone are not yet supported.
+
+1024px on iPhone with the FLUX standard VAE should still be treated as
+experimental; the validated 1024 path uses the small decoder with conv-striped
+decode.
 
 ## Cleanup
 

@@ -305,8 +305,9 @@ struct PromptBar: View {
     // a strength slider). `referenceThumbnails` (the strip above the field, shown only when populated)
     // shares the TextField's exact surface2 / hairline / Radius.field vocabulary, so it reads as an
     // attachment to the prompt, not a floating box. `attachButton` (the whole empty state) echoes the
-    // Generate button's 44pt circle in a quiet secondary weight. Any reference routes to the resident
-    // facade (streaming is text-to-image only), so on iPhone i2i runs at 512.
+    // Generate button's 44pt circle in a quiet secondary weight. macOS routes references to the resident
+    // facade (1–3 refs); iPhone streams the reference tokens through the block-streaming path (a single
+    // 512²-capped reference at 512 output), so i2i fits the phone instead of OOMing the resident facade.
 
     private var referenceThumbSize: CGFloat { 56 }
 

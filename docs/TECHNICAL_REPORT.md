@@ -49,15 +49,23 @@ source.
 ### FLUX.2 Klein 4B
 
 FLUX.2 Klein runs through a whole-pipeline facade over `flux-2-swift-mlx`.
-It is not block-streamed by the generic engine because the upstream pipeline owns
-its denoise loop.
+For larger work on iPhone it also has a block-streaming transformer path that
+keeps a single block resident at a time. The pre-quantized 4-bit transformer is
+about 2.18 GB.
 
-Status:
+Status (all validated on iPhone 16 Pro, 8 GB):
 
 - macOS path works with the pre-quantized 4-bit checkpoint.
-- iPhone path works at 512px / 4 steps / small decoder.
-- Validated iPhone 16 Pro run: about 4.3 GB peak resident memory, about 1m11s,
-  clean image.
+- iPhone text-to-image 512px / 4 steps / small decoder: resident facade, about
+  4.3 GB peak resident memory, about 1m11s, clean image.
+- iPhone text-to-image 1024px: block-streaming transformer, about 3.83 GB peak,
+  about 4m22s. The earlier "10 GB decode wall" was a measurement artifact;
+  conv-striping (seam-free, bit-exact) bounds the 1024 VAE decode to about
+  4.28 GB. A cheap latent preview (x0-pred latent to RGB, no VAE) shows the
+  image forming during the denoise loop.
+- iPhone image-to-image (reference-context) 512px: block-streaming, about
+  3.45 GB peak (Mac forced-stream measured 3.78 GB), about 1m49s, no restart,
+  good quality. See the streaming i2i finding below.
 
 Main technical finding: the normal "4-bit" load path must not download bf16 and
 quantize in memory on iPhone. The app uses the pre-quantized
@@ -122,6 +130,34 @@ measured about 4.3 GB peak on an 8 GB iPhone and did not jetsam, even though the
 displayed budget was lower. Fit badges should be treated as conservative
 guidance, not a hard OS limit.
 
+### Image-to-image on iPhone is a streaming-residency problem
+
+MobileDiffuser's img2img is FLUX.2 reference-context: 1-3 reference images are
+VAE-encoded and concatenated into the transformer sequence as conditioning, the
+output denoises from pure noise while attending to the references, and strength
+is always 1.0. There is no strength / noise-injection slider.
+
+On macOS this runs through the resident facade with 1-3 references up to the
+chosen size (1024 i2i peaks around 6.9 GB). On iPhone the resident facade
+OOM'd the phone: each reference is about 4096 tokens at `maxImageArea` 1024², so
+even a "512 i2i" ran roughly 5120 tokens resident, about 5.75 GB, past the
+~5.5 GB jetsam line and into a whole-phone respring. JetsamEvent logs confirmed
+this is a memory limit, not a thermal one. i2i was first disabled on iPhone,
+then re-enabled through the block-streaming path.
+
+The streamed transformer carries the reference tokens as `[output ; reference]`
+with output first, denoises and decodes only the output tokens (a new
+`outputSeqLen` slice in `streamUnembed`), and caps the reference to 512²
+(about 1024 tokens, single reference). The streamed sequence is therefore at
+most about 2048 tokens, lighter than the already-shipped 1024px text-to-image
+path at 4096 tokens. The reference VAE is freed before the transformer streams,
+so the encoder and transformer never co-reside.
+
+A 512 i2i parity gate (`flux2-demo --parity --i2i`) showed the streamed output
+is pixel-identical to the resident facade (maxPixelDiff 0, PSNR inf) both
+resident and forced-block-streaming, and the streamed-decomposition unit tests
+pass. Validated on iPhone 16 Pro at about 3.45 GB peak, about 1m49s, no restart.
+
 ## Runtime Defaults
 
 ```text
@@ -167,9 +203,13 @@ jetsam log, if any:
 ## Current Limitations
 
 - The in-app Library is session-only.
-- img2img is not exposed in the Create UI.
-- External SSD model streaming is not exposed in the app yet.
-- FLUX.2 1024px on iPhone is still cautious because VAE decode and attention
-  activations scale sharply.
+- img2img on iPhone is single-reference and 512px output only. Multi-reference
+  streaming and higher-than-512 i2i output on iPhone are not done yet.
+- Z-Image classic (strength-based) img2img is not implemented; i2i is
+  FLUX.2 reference-context only.
+- External SSD model streaming is not exposed in the app yet (a documented but
+  deferred challenge experiment).
+- FLUX.2 1024px text-to-image on iPhone works through block streaming but stays
+  cautious because VAE decode and attention activations scale sharply.
 - Capability estimates are conservative and should keep being updated from
   real device measurements.

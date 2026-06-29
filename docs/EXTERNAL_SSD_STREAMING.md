@@ -56,7 +56,7 @@ Missing (the ~450–550 lines of app-layer work):
   `startAccessingSecurityScopedResource`**. iOS needs the security-scoped resource held (defer-balanced)
   for the *entire* run while preading the external folder.
 - **App: pick + persist the location.** No `UIDocumentPicker` / bookmark code; `AppModel` hardwires the
-  download base to internal Application Support (`AppModel.swift` ~lines 312–315). Need: pick an
+  download base to internal Application Support (`AppModel.swift` ~lines 318–321). Need: pick an
   external folder → store a security-scoped **bookmark** → route the component source at it → set
   `externalSSDAvailable = true`.
 

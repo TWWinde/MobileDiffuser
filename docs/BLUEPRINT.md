@@ -91,8 +91,9 @@ FLUX.2 Klein 4B builds and is wired up on iPhone alongside Z-Image.
    precision prefs survive (shared persisted keys).
 
 **Memory:** two-phase resident — **512 fits** (≈ max(encoder ~1.9 GB, transformer 2.18 + VAE 0.58) +
-working set ≈ 3.3 GB, under an 8 GB phone's ~4 GB budget); **1024 is tight** (double-stream activations
-push toward ~4.3 GB) and needs empirical confirmation.
+working set ≈ 3.3 GB, under an 8 GB phone's ~4 GB budget); **resident 1024 is tight** (double-stream
+activations push toward ~4.3 GB), so iPhone 1024 runs on the **block-streaming** path instead
+(validated; see *Block streaming for FLUX* above).
 
 **Validation — done, both platforms.** Mac (2026-06-24): downloaded the 2.18 GB checkpoint, loaded
 with zero `notFound`/OOM, generated a clean 512 text2img in 4 steps — proving the 4-bit key mapping +
@@ -100,13 +101,48 @@ quantize-shell-then-update numerics. **iPhone 16 Pro (2026-06-25): PASSED** — 
 4 steps, small decoder, **two-phase, peak 4.3 GB, ~1m11s, clean image**. Two empirical notes: the real
 4.3 GB peak runs **higher than the facade's `capabilities()` estimate (~3.3 GB)** — the working-set
 constant under-predicts; and 4.3 GB exceeded the conservative ~4 GB (50%-of-RAM) budget yet iOS did not
-jetsam, so there is real foreground headroom beyond that budget. **512 is confirmed safe; 1024 stays
-cautious** (activations scale ~4×), which is why the standard VAE is gated to ≤512 on iPhone. (Mac CLI
-note: `swift run` can't find MLX's `default.metallib` — copy `mlx-swift_Cmlx.bundle` next to the binary.)
+jetsam, so there is real foreground headroom beyond that budget. **512 resident is confirmed safe;**
+1024 was later landed on iPhone via **block streaming** (conv-striped VAE decode, peak 3.83 GB — see
+above), rather than the resident facade. (Mac CLI note: `swift run` can't find MLX's `default.metallib`
+— copy `mlx-swift_Cmlx.bundle` next to the binary.)
 
-**Later (Phase 2):** block streaming for FLUX (the per-block `WeightSource` ranged-read ladder Z-Image
-uses) — only needed for 1024 full-res headroom and larger variants (Klein 9B); peak would drop to
-~1 resident block + base.
+**Block streaming for FLUX — done (2026-06-27/29).** The per-block ladder (one transformer block
+resident at a time, the rest streamed from disk) now backs the headroom-hungry FLUX paths and is
+bit-exact with the resident facade:
+
+- **1024 text2img** streams the transformer (peak **3.83 GB, ~4m22s** on iPhone 16 Pro). The "10 GB
+  decode wall" was a measurement artifact; **conv-striping** (seam-free, bit-exact) bounds the 1024
+  VAE decode to ~4.28 GB. A cheap **latent preview** (x0-pred latent→RGB, no VAE) shows the image
+  forming during the denoise.
+- **512 image-to-image** (reference-context, below) streams the transformer carrying the reference
+  tokens (peak **~3.45 GB, on-device-validated 1m49s**, no respring). Still needed for larger
+  variants (Klein 9B), where peak would drop to ~1 resident block + base.
+
+### Image-to-image — FLUX.2 reference-context (shipped, iPhone included)
+
+img2img here is **not** a strength/noise-injection slider. It is FLUX.2 **reference-context**: 1–3
+reference images are VAE-encoded and concatenated into the transformer sequence as conditioning; the
+output denoises from **pure noise** while attending to the refs (strength is always 1.0). Shipped
+2026-06-29 (app `8210253`, `swift-diffusion-core` `c0e8f43`, `flux-2-swift-mlx` `bbae617`,
+`flux2-diffusion-engine` `6d29c85`).
+
+- **macOS** — resident facade, 1–3 references, up to the chosen size (1024-i2i facade peaks ~6.9 GB).
+- **iPhone** — the resident facade OOM'd the phone: each reference is ~4096 tokens at the 1024²
+  max-image-area, so even "512 i2i" ran ~5120 tokens **resident** ≈ 5.75 GB, over the ~5.5 GB jetsam
+  line → whole-phone respring (a **memory** limit confirmed via JetsamEvent logs, not thermal). So
+  i2i was first disabled on iPhone, then **re-enabled via block streaming**: the streamed transformer
+  carries the sequence as `[output ; reference]` (output first); only the **output** tokens are
+  denoised/decoded (a new `outputSeqLen` slice in `streamUnembed`); the reference is capped to 512²
+  (~1024 tokens, single reference) so the streamed sequence (≤2048 tokens) is **lighter** than the
+  already-shipped 1024 text2img (4096 tokens); the reference VAE is freed before the transformer
+  streams (no encoder↔transformer co-residency). **On-device validated** on iPhone 16 Pro: 512 i2i,
+  peak **~3.45 GB**, 1m49s, no restart, good quality.
+- **Validation** — a 512 i2i parity gate (`flux2-demo --parity --i2i`) proved the streamed output is
+  **pixel-identical** to the resident facade (`maxPixelDiff=0`, PSNR=inf), both resident and
+  forced-block-streaming; an adversarial code audit found the order/pos-id/slice correct and the
+  memory lifecycle clean; the streamed-decomposition unit tests pass.
+- **Not yet:** multi-reference streaming i2i on iPhone (single ref today) and higher-than-512 i2i
+  output on iPhone; Z-Image classic (strength-based) i2i.
 
 ---
 
@@ -204,8 +240,9 @@ app special:
 - **Models** — download center: family-grouped cards, recommended-for-device, precision
   chips, fit badges, install/progress. Model detail drawer: variant table, component
   breakdown, storage location (internal / external SSD), resumable download.
-- **Create** — generation workspace: prompt, full-bleed canvas, steps/seed/size, reference
-  image (img2img), a memory governor pill (resident / streaming), per-step progress.
+- **Create** — generation workspace: prompt, full-bleed canvas, steps/seed/size, 1–3 reference
+  images (img2img = FLUX.2 reference-context, not a strength slider), a memory governor pill
+  (resident / streaming), latent preview + per-step progress.
 - **Library** — your generated images: grid by day, tap for detail (prompt + params),
   **reuse settings** to iterate, favorite, export.
 - **Settings** — storage & external SSD: default download location, *stream large models
@@ -247,9 +284,12 @@ shared components.
   Create workspace, Library, memory governor, persisted image cache.
 - **Phase 2 — iPhone.** Same shell adapted (TabView), `MemoryProbe` gating,
   increased-memory-limit entitlement, internal-storage streaming.
-  **Status:** the shell builds for iPhone and the current 512px Z-Image / FLUX paths are
-  validated on device. 1024px FLUX standard-VAE and larger variants remain cautious because
-  VAE decode and attention activations dominate peak memory.
+  **Status:** the shell builds for iPhone and the Z-Image / FLUX paths are validated on device —
+  512 text2img (~4.3 GB), **1024 text2img via block streaming** (peak 3.83 GB, conv-striped VAE
+  decode), and **512 image-to-image** (reference-context, block-streamed, peak ~3.45 GB), all on
+  iPhone 16 Pro. Still cautious: the **resident** 1024 facade and larger variants (Klein 9B) on
+  iPhone, plus multi-reference / >512 i2i — VAE decode and attention activations dominate peak
+  memory, which is exactly why the streaming ladder, not the facade, carries those paths.
 - **Phase 3 — external SSD + breadth.** `WeightSource` ranged-read path (USB-C SSD), more
   model packages (one public repo each), generation queue, downloader hardening.
 

@@ -60,7 +60,8 @@ override is configured.
 
 The UI is a studio shell:
 
-- Create: prompt, canvas, size/steps/seed controls, model bar.
+- Create: prompt, canvas, size/steps/seed controls, model bar, and (for FLUX.2)
+  a 1-to-3 reference-image picker for img2img.
 - Models: model cards, fit badges, recipe axes, component downloads.
 - Library: in-session generated images, settings reuse, export.
 - Settings: appearance, storage, device memory, model management.
@@ -115,8 +116,12 @@ access. Those are wrapped as facade engines.
 - `ZImageFacadeEngine`: resident macOS wrapper over `ZImagePipeline`.
 - `Flux2FacadeEngine`: wrapper over `Flux2Pipeline` from `flux-2-swift-mlx`.
 
-FLUX.2 is cross-platform now, but it remains a whole-pipeline facade rather than
-a block-streamed `DiffusionArchitecture`.
+FLUX.2 is cross-platform now. At the app boundary it remains a whole-pipeline
+facade rather than a block-streamed `DiffusionArchitecture`, but the FLUX package
+owns its own internal block-streaming path: the facade dispatches the heavy
+iPhone cases (1024px text-to-image and image-to-image) to a streamed transformer
+that keeps one block resident at a time, while macOS and the lighter iPhone cases
+stay resident.
 
 ## Model Paths
 
@@ -180,11 +185,61 @@ before the transformer/VAE phase. iPhone builds also trim the MLX GPU cache each
 denoise step. The standard VAE is gated to 512px in the app because its wider
 decoder activations are risky at larger sizes.
 
-Validated state:
+Validated state (text-to-image):
 
 - macOS: 4-bit pre-quantized path generates clean 512px images.
-- iPhone 16 Pro: 512px, 4 steps, small decoder, about 4.3 GB peak resident
-  memory and about 1m11s runtime.
+- iPhone 16 Pro, 512px: resident facade, 4 steps, small decoder, about 4.3 GB
+  peak resident memory and about 1m11s runtime.
+- iPhone 16 Pro, 1024px: the transformer runs as a block-streaming pipeline (one
+  block resident at a time) instead of the resident facade. Peak about 3.83 GB,
+  about 4m22s. The earlier "10 GB decode wall" was a measurement artifact; the
+  1024px VAE decode is bounded to about 4.28 GB by conv striping (seam-free,
+  bit-exact). A cheap x0-pred latent-to-RGB preview shows the image forming
+  without running the VAE.
+
+### FLUX.2 image-to-image (reference-context)
+
+img2img in MobileDiffuser is FLUX.2 reference-context, not a strength/denoise
+slider. One to three reference images are VAE-encoded and concatenated into the
+transformer sequence as conditioning; the output always denoises from pure noise
+while attending to the references, so strength is effectively always 1.0. The
+reference latents are packed by the same `LatentUtils` path the facade uses, and
+each reference is tagged on a separate RoPE T-coordinate so the transformer keeps
+reference tokens distinct from the T=0 output tokens.
+
+It flows through two residencies, mirroring text-to-image:
+
+- macOS: the resident facade, 1 to 3 references, up to the chosen size. A 1024px
+  i2i run peaks around 6.9 GB resident.
+- iPhone: the resident facade OOM'd the phone. Each reference is about 4096
+  tokens at the resident `maxImageArea` of 1024², so even a "512 i2i" ran roughly
+  5120 tokens resident (about 5.75 GB), over the phone's jetsam line and causing a
+  whole-device respring. This was confirmed a memory limit via JetsamEvent logs,
+  not thermal. i2i was first disabled on iPhone, then re-enabled through the
+  block-streaming path.
+
+The streaming i2i path is shaped to stay lighter than the already-shipped
+1024px text-to-image:
+
+- The streamed transformer carries the sequence as `[output ; reference]`
+  (output tokens first). Only the output tokens are denoised and decoded; a new
+  `outputSeqLen` slice in `streamUnembed` selects them.
+- The reference is capped to 512² (about 1024 tokens, a single reference on
+  iPhone), so the streamed sequence is at most about 2048 tokens — lighter than
+  the 4096-token 1024px text-to-image path. On macOS the facade keeps the
+  resident 1024² reference encoding.
+- The reference VAE encoder is freed before the transformer streams, so the
+  encoder and transformer never co-reside.
+
+Validated state (image-to-image):
+
+- iPhone 16 Pro, 512px output, single reference: block-streaming, peak about
+  3.45 GB on-device, about 1m49s, no restart, good quality. (A Mac forced-stream
+  run measured about 3.78 GB.)
+- A 512px i2i parity gate (`flux2-demo --parity --i2i`) proves the streamed
+  output is pixel-identical to the resident facade (max pixel diff 0, PSNR inf),
+  both resident and forced-block-streaming. The streamed-decomposition unit
+  tests pass.
 
 ## Memory Governance
 
@@ -240,11 +295,15 @@ MLX tests should be run with Xcode/xcodebuild where possible, because plain
 
 - Library persistence is in-session only; generated images are not yet stored on
   disk as an app library.
-- The Create UI exposes text-to-image only. Some engine APIs already carry
-  reference-image fields, but the UI does not yet surface img2img.
+- img2img is FLUX.2 reference-context only. Z-Image classic (strength-based)
+  img2img is not implemented.
+- iPhone img2img is a single reference at 512px output. Multi-reference streaming
+  i2i and higher-than-512 i2i output on iPhone are not done; macOS still allows
+  1 to 3 references up to the chosen size.
 - Z-Image iPhone streaming is proven, but still the highest-risk path for
   future model changes because it depends on exact key routing and block parity.
-- FLUX.2 at 1024px on iPhone remains cautious. VAE decode and attention
-  activations dominate peak memory.
+- FLUX.2 at 1024px on iPhone is validated through the streaming path but stays
+  cautious. VAE decode and attention activations dominate peak memory.
 - External SSD streaming is designed into `WeightSource`, but the app does not
-  yet expose external model locations or security-scoped bookmarks.
+  yet expose external model locations or security-scoped bookmarks. It is a
+  deferred challenge experiment (no-go as a product, go as an experiment).
