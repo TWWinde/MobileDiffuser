@@ -202,7 +202,6 @@ jetsam log, if any:
 
 ## Current Limitations
 
-- The in-app Library is session-only.
 - img2img on iPhone is single-reference and 512px output only. Multi-reference
   streaming and higher-than-512 i2i output on iPhone are not done yet.
 - Z-Image classic (strength-based) img2img is not implemented; i2i is

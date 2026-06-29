@@ -219,6 +219,26 @@ final class AppModel {
         return "Download failed"
     }
 
+    /// A short, user-facing message for a generation/load failure — shown on the canvas instead of a
+    /// raw `String(describing:)` enum dump, and paired with a Retry button (most of these recover).
+    static func friendlyError(_ error: Error) -> String {
+        if error is CancellationError { return "Cancelled" }
+        if let urlError = error as? URLError {
+            return urlError.code == .notConnectedToInternet ? "No connection" : "Network error"
+        }
+        if let e = error as? EngineError {
+            switch e {
+            case .unsupportedOnDevice:  return "This size needs more memory than this device has. Try a smaller size."
+            case .pausedForHeat:        return "Paused to let your phone cool down. Tap Generate to resume once it's cooler."
+            case .decodeFailed:         return "Couldn't finish decoding the image. Tap Generate to try again."
+            case .notLoaded:            return "The model isn't loaded yet."
+            case .streamingUnavailable: return "This model needs a streaming download that isn't ready yet."
+            case .invalidRequest(let m): return m
+            }
+        }
+        return "Something went wrong. Tap Generate to try again, or pick a smaller size."
+    }
+
     /// The individually-managed FLUX components and their current on-disk state.
     func fluxComponents() -> [Flux2FacadeEngine.Flux2ComponentInfo] { Flux2FacadeEngine.allComponents() }
 
@@ -426,7 +446,7 @@ final class AppModel {
             phase = .cancelled
             componentsRevision += 1
         } catch {
-            phase = .failed(String(describing: error))
+            phase = .failed(Self.friendlyError(error))
         }
     }
 
@@ -546,7 +566,7 @@ final class AppModel {
                 self.phase = .cancelled
                 self.componentsRevision += 1
             } catch {
-                self.phase = .failed(String(describing: error))
+                self.phase = .failed(Self.friendlyError(error))
             }
         }
     }
@@ -573,7 +593,7 @@ final class AppModel {
                     self.phase = .cancelled
                     self.componentsRevision += 1
                 } catch {
-                    self.phase = .failed(String(describing: error))
+                    self.phase = .failed(Self.friendlyError(error))
                 }
             }
         }
@@ -889,7 +909,7 @@ final class AppModel {
         } catch {
             await unloadOneShotStreamingEngineIfNeeded(for: model)
             guard activeOperationID == operationID else { return }
-            phase = .failed(String(describing: error))
+            phase = .failed(Self.friendlyError(error))
         }
     }
 

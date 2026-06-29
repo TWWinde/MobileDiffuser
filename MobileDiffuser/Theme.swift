@@ -318,6 +318,29 @@ struct SeedField: View {
     }
 }
 
+// MARK: - Toast banner
+
+extension View {
+    /// Bottom confirmation toast (e.g. "Saved to Photos", "Cancelled"), shared by Create and Library
+    /// so the user sees feedback on whichever screen they're on — not only in the Library.
+    func toastBanner(_ toast: String?) -> some View {
+        overlay(alignment: .bottom) {
+            if let toast {
+                Label(toast, systemImage: "checkmark.circle.fill")
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(Theme.textPrimary)
+                    .padding(.horizontal, Theme.Space.lg).padding(.vertical, Theme.Space.md)
+                    .background(Theme.surface, in: Capsule())
+                    .overlay(Capsule().strokeBorder(Theme.hairline))
+                    .shadow(color: .black.opacity(0.15), radius: 12, y: 4)
+                    .padding(.bottom, Theme.Space.xl)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .animation(Motion.canvas, value: toast)
+    }
+}
+
 // MARK: - ComponentBar (optional enrichment)
 
 /// A proportional bar visualizing a variant's transformer / text-encoder / VAE split, with a
