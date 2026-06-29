@@ -245,7 +245,7 @@ struct PromptBar: View {
                     .background(Theme.surface2, in: RoundedRectangle(cornerRadius: Theme.Radius.field, style: .continuous))
                     .overlay(RoundedRectangle(cornerRadius: Theme.Radius.field, style: .continuous).strokeBorder(Theme.hairline))
 
-                if model.selected.family == .flux2 { attachButton }   // quiet, secondary-weight affordance
+                if model.selected.family == .flux2 && model.referenceImages.isEmpty { attachButton }   // empty-state first-add
 
                 Button { model.startGenerate() } label: {
                     Image(systemName: "arrow.up").font(.headline)
@@ -276,9 +276,14 @@ struct PromptBar: View {
                 .frame(maxWidth: 120)
             }
         }
-        // Loader is on the always-present VStack (not the conditional strip) so it fires for the
-        // empty-state attach button too.
+        // Loaders are on the always-present VStack (not a conditional sub-view) so they fire from both
+        // the empty-state attach button and the populated strip's "+" slot.
         .onChange(of: pickerItems) { _, items in Task { await loadReferences(items) } }
+        #if os(macOS)
+        .fileImporter(isPresented: $showImporter, allowedContentTypes: [.image], allowsMultipleSelection: true) { result in
+            if case .success(let urls) = result { Task { await loadReferences(urls: urls) } }
+        }
+        #endif
         // Compose the workspace on wide Macs: cap content to the canvas width, centered,
         // while the surface bar still spans edge to edge.
         .frame(maxWidth: 880)
@@ -318,6 +323,13 @@ struct PromptBar: View {
                         .accessibilityLabel("Reference image \(idx + 1)")
                         .transition(.scale(scale: 0.85).combined(with: .opacity))
                 }
+                if model.referenceImages.count < 3 {
+                    attachPicker { addTile() }            // an open slot — append another reference
+                        .disabled(model.isBusy)
+                        .opacity(model.isBusy ? 0.45 : 1)
+                        .accessibilityLabel("Add reference image")
+                        .transition(.scale(scale: 0.85).combined(with: .opacity))
+                }
                 Spacer(minLength: 0)
             }
             .padding(.top, 2)   // breathing room for the nudged remove buttons
@@ -340,58 +352,73 @@ struct PromptBar: View {
         .accessibilityLabel("Remove reference image \(idx + 1)")
     }
 
-    /// The icon-only attach button — the entire empty state. Echoes the Generate button's 44pt circle in
-    /// a quiet secondary weight, so it reads as a companion, never a competitor, to the primary action.
-    /// macOS picks image FILES via a Finder open panel; iOS picks from the Photos library. Stays visible
-    /// (disabled) at the 3-image cap to avoid a layout jump.
+    /// Platform-correct image picker — a Finder open panel on macOS (choose image FILES), the Photos
+    /// library on iOS — wrapping a custom label. iOS caps the selection to the REMAINING slots so each
+    /// pick APPENDS up to 3; macOS multi-select is capped in `loadReferences(urls:)`. macOS routes
+    /// through `showImporter` → the VStack's `.fileImporter`.
+    @ViewBuilder private func attachPicker<Label: View>(@ViewBuilder label: () -> Label) -> some View {
+        #if os(macOS)
+        Button { showImporter = true } label: { label() }
+            .buttonStyle(.plain)
+        #else
+        PhotosPicker(selection: $pickerItems,
+                     maxSelectionCount: max(1, 3 - model.referenceImages.count),
+                     matching: .images) { label() }
+        #endif
+    }
+
+    /// The empty-state attach affordance: an icon-only circle echoing the Generate button's 44pt shape in
+    /// a quiet secondary weight. Shown only when no references are attached; once populated, the strip's
+    /// "+" slot handles adding more.
     @ViewBuilder private var attachButton: some View {
-        let atLimit = model.referenceImages.count >= 3
-        Group {
-            #if os(macOS)
-            Button { showImporter = true } label: { attachLabel(atLimit) }
-                .fileImporter(isPresented: $showImporter, allowedContentTypes: [.image],
-                              allowsMultipleSelection: true) { result in
-                    if case .success(let urls) = result { Task { await loadReferences(urls: urls) } }
-                }
-            #else
-            PhotosPicker(selection: $pickerItems, maxSelectionCount: 3, matching: .images) {
-                attachLabel(atLimit)
-            }
-            #endif
+        attachPicker {
+            Image(systemName: "photo.badge.plus")
+                .font(.system(size: 17, weight: .regular))
+                .foregroundStyle(Theme.textSecondary)
+                .frame(width: 44, height: 44)
+                .background(Theme.surface2, in: Circle())
+                .overlay(Circle().strokeBorder(Theme.hairline))
         }
-        .buttonStyle(.plain)
-        .disabled(model.isBusy || atLimit)
-        .opacity(model.isBusy || atLimit ? 0.45 : 1)
-        .accessibilityLabel(model.referenceImages.isEmpty ? "Attach reference image" : "Add reference image")
+        .disabled(model.isBusy)
+        .opacity(model.isBusy ? 0.45 : 1)
+        .accessibilityLabel("Attach reference image")
         .accessibilityHint("FLUX uses these images as editing or style context")
     }
 
-    private func attachLabel(_ atLimit: Bool) -> some View {
-        Image(systemName: "photo.badge.plus")
-            .font(.system(size: 17, weight: .regular))
-            .foregroundStyle(atLimit ? Theme.textTertiary : Theme.textSecondary)
-            .frame(width: 44, height: 44)
-            .background(Theme.surface2, in: Circle())
-            .overlay(Circle().strokeBorder(Theme.hairline))
+    /// The trailing "+" slot in the populated strip — sized and styled exactly like a thumbnail, so the
+    /// strip reads as "your images + an open slot". Hidden at the 3-image cap.
+    private func addTile() -> some View {
+        Image(systemName: "plus")
+            .font(.system(size: 18, weight: .regular))
+            .foregroundStyle(Theme.textSecondary)
+            .frame(width: referenceThumbSize, height: referenceThumbSize)
+            .background(Theme.surface2, in: RoundedRectangle(cornerRadius: Theme.Radius.field, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: Theme.Radius.field, style: .continuous).strokeBorder(Theme.hairline))
     }
 
     private func loadReferences(_ items: [PhotosPickerItem]) async {
+        guard !items.isEmpty else { return }
         var images: [CGImage] = []
-        for item in items.prefix(3) {
+        for item in items {
             if let data = try? await item.loadTransferable(type: Data.self),
                let src = CGImageSourceCreateWithData(data as CFData, nil),
                let cg = CGImageSourceCreateImageAtIndex(src, 0, nil) {
                 images.append(cg)
             }
         }
-        await MainActor.run { withAnimation(Motion.spring) { model.referenceImages = images } }
+        await MainActor.run {
+            withAnimation(Motion.spring) {
+                model.referenceImages = Array((model.referenceImages + images).prefix(3))   // APPEND, cap 3
+            }
+            pickerItems.removeAll()   // reset so the next pick starts fresh (append semantics)
+        }
     }
 
     #if os(macOS)
     /// macOS: load reference images from Finder-picked file URLs (security-scoped access).
     private func loadReferences(urls: [URL]) async {
         var images: [CGImage] = []
-        for url in urls.prefix(3) {
+        for url in urls {
             let scoped = url.startAccessingSecurityScopedResource()
             defer { if scoped { url.stopAccessingSecurityScopedResource() } }
             if let src = CGImageSourceCreateWithURL(url as CFURL, nil),
@@ -399,7 +426,12 @@ struct PromptBar: View {
                 images.append(cg)
             }
         }
-        await MainActor.run { withAnimation(Motion.spring) { model.referenceImages = images } }
+        let toAdd = images
+        await MainActor.run {
+            withAnimation(Motion.spring) {
+                model.referenceImages = Array((model.referenceImages + toAdd).prefix(3))   // APPEND, cap 3
+            }
+        }
     }
     #endif
 }
