@@ -3,6 +3,8 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 import SwiftUI
+import PhotosUI
+import ImageIO
 
 /// Generation workspace: a full-bleed result canvas above a prompt + controls panel.
 struct CreateView: View {
@@ -225,9 +227,11 @@ struct HeroCanvas: View {
 /// Prompt entry, circular Generate action, and the size / steps / seed controls.
 struct PromptBar: View {
     @Bindable var model: AppModel
+    @State private var pickerItems: [PhotosPickerItem] = []
 
     var body: some View {
         VStack(spacing: Theme.Space.md) {
+            if model.selected.family == .flux2 { referenceStrip }   // FLUX.2 reference-context i2i
             HStack(alignment: .top, spacing: Theme.Space.md) {
                 TextField("Describe an image…", text: $model.prompt, axis: .vertical)
                     .textFieldStyle(.plain)
@@ -280,5 +284,57 @@ struct PromptBar: View {
             Text(title).font(.caption2).foregroundStyle(Theme.textTertiary)
             content()
         }
+    }
+
+    /// FLUX.2 reference-context i2i: pick 1–3 reference images (editing / style / composition). Adding
+    /// any reference routes the run to the resident facade (the streaming path is text-to-image only),
+    /// so on iPhone i2i runs at 512.
+    @ViewBuilder private var referenceStrip: some View {
+        HStack(spacing: Theme.Space.sm) {
+            ForEach(Array(model.referenceImages.enumerated()), id: \.offset) { idx, cg in
+                Image(decorative: cg, scale: 1).resizable().aspectRatio(contentMode: .fill)
+                    .frame(width: 44, height: 44)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(Theme.hairline))
+                    .overlay(alignment: .topTrailing) {
+                        Button {
+                            model.referenceImages.remove(at: idx); pickerItems.removeAll()
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .symbolRenderingMode(.palette).foregroundStyle(.white, .black.opacity(0.5))
+                        }
+                        .buttonStyle(.plain).offset(x: 5, y: -5)
+                    }
+            }
+            if model.referenceImages.count < 3 {
+                PhotosPicker(selection: $pickerItems, maxSelectionCount: 3, matching: .images) {
+                    VStack(spacing: 2) {
+                        Image(systemName: "photo.badge.plus")
+                        Text(model.referenceImages.isEmpty ? "Reference" : "Add").font(.caption2)
+                    }
+                    .frame(width: 44, height: 44).foregroundStyle(Theme.textSecondary)
+                    .background(Theme.surface2, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(Theme.hairline))
+                }
+                .disabled(model.isBusy)
+            }
+            Spacer(minLength: 0)
+            if !model.referenceImages.isEmpty {
+                Text("Edit / reference").font(.caption2).foregroundStyle(Theme.textTertiary)
+            }
+        }
+        .onChange(of: pickerItems) { _, items in Task { await loadReferences(items) } }
+    }
+
+    private func loadReferences(_ items: [PhotosPickerItem]) async {
+        var images: [CGImage] = []
+        for item in items.prefix(3) {
+            if let data = try? await item.loadTransferable(type: Data.self),
+               let src = CGImageSourceCreateWithData(data as CFData, nil),
+               let cg = CGImageSourceCreateImageAtIndex(src, 0, nil) {
+                images.append(cg)
+            }
+        }
+        await MainActor.run { model.referenceImages = images }
     }
 }

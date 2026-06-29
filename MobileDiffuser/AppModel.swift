@@ -159,6 +159,10 @@ final class AppModel {
     /// Cheap latent→RGB preview of the in-progress denoise (architecture-provided, no VAE), shown in
     /// the canvas so a long render isn't a blank wait. Cleared at start and when the final image lands.
     var previewImage: CGImage?
+    /// Reference images for FLUX.2 image-to-image (1–3; editing / reference-context conditioning, NOT
+    /// a strength slider). When non-empty the run routes to the resident facade (the block-streaming
+    /// path is text-to-image only), so on iPhone i2i runs the 512 facade.
+    var referenceImages: [CGImage] = []
     var history: [Generation] = []
     /// Transient confirmation banner (e.g. "Saved to Photos"); auto-clears after a couple seconds.
     var toast: String?
@@ -803,6 +807,7 @@ final class AppModel {
             let seed = UInt64(seedText) ?? 42
             let request = GenerationRequest(prompt: prompt, steps: steps, seed: seed,
                                             size: ImageSize(width: size, height: size),
+                                            referenceImages: model.family == .flux2 ? referenceImages : [],
                                             control: control)
             let genStart = Date()
             let cgImage: CGImage
@@ -993,7 +998,9 @@ final class AppModel {
 
     /// FLUX: 1024 streams the transformer block-by-block (the only way it fits an iPhone); 512 stays on
     /// the fast, validated resident facade. macOS always runs the resident facade.
-    private var fluxUsesStreaming: Bool { device.isPhone && size > 512 }
+    /// FLUX 1024-on-iPhone streams the transformer; but i2i (reference images) is text-to-image-only
+    /// on the streaming path, so any run WITH reference images falls back to the resident facade.
+    private var fluxUsesStreaming: Bool { device.isPhone && size > 512 && referenceImages.isEmpty }
 
     private func unloadOneShotStreamingEngineIfNeeded(for model: DiffusionModel) async {
         guard model.family == .zImage, zImageUsesStreaming, loadedID == model.id,
