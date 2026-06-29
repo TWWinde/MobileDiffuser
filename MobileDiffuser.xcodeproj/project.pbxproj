@@ -7,11 +7,13 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		AABB15162F6995CE007A3533 /* StableDiffusion in Frameworks */ = {isa = PBXBuildFile; productRef = AABB15152F6995CE007A3533 /* StableDiffusion */; };
+		DDEE0000000000000000A001 /* ZImageMLX in Frameworks */ = {isa = PBXBuildFile; productRef = DDEE0000000000000000A003 /* ZImageMLX */; };
+		DDEE0000000000000000B001 /* AppEngines in Frameworks */ = {isa = PBXBuildFile; productRef = DDEE0000000000000000B003 /* AppEngines */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		AABB15032F698F45007A3533 /* MobileDiffuser.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MobileDiffuser.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		DDEE0000000000000000C001 /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Signing.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -27,7 +29,8 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				AABB15162F6995CE007A3533 /* StableDiffusion in Frameworks */,
+				DDEE0000000000000000A001 /* ZImageMLX in Frameworks */,
+				DDEE0000000000000000B001 /* AppEngines in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -37,6 +40,7 @@
 		AABB14FA2F698F44007A3533 = {
 			isa = PBXGroup;
 			children = (
+				DDEE0000000000000000C001 /* Signing.xcconfig */,
 				AABB15052F698F45007A3533 /* MobileDiffuser */,
 				AABB15042F698F45007A3533 /* Products */,
 			);
@@ -70,7 +74,8 @@
 			);
 			name = MobileDiffuser;
 			packageProductDependencies = (
-				AABB15152F6995CE007A3533 /* StableDiffusion */,
+				DDEE0000000000000000A003 /* ZImageMLX */,
+				DDEE0000000000000000B003 /* AppEngines */,
 			);
 			productName = MobileDiffuser;
 			productReference = AABB15032F698F45007A3533 /* MobileDiffuser.app */;
@@ -101,7 +106,8 @@
 			mainGroup = AABB14FA2F698F44007A3533;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				AABB15142F6995CE007A3533 /* XCLocalSwiftPackageReference "ml-stable-diffusion" */,
+				DDEE0000000000000000A002 /* XCLocalSwiftPackageReference "../z-image-swift-mlx" */,
+				DDEE0000000000000000B002 /* XCLocalSwiftPackageReference "AppEngines" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = AABB15042F698F45007A3533 /* Products */;
@@ -255,6 +261,7 @@
 		};
 		AABB15122F698F46007A3533 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = DDEE0000000000000000C001 /* Signing.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
@@ -262,9 +269,9 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "\"MobileDiffuser/Preview Content\"";
-				DEVELOPMENT_TEAM = "";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Save your generated images to Photos.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -274,9 +281,10 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.example.MobileDiffuser;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -285,6 +293,7 @@
 		};
 		AABB15132F698F46007A3533 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = DDEE0000000000000000C001 /* Signing.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
@@ -292,9 +301,9 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "\"MobileDiffuser/Preview Content\"";
-				DEVELOPMENT_TEAM = "";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Save your generated images to Photos.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -304,9 +313,10 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.example.MobileDiffuser;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -337,17 +347,26 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
-		AABB15142F6995CE007A3533 /* XCLocalSwiftPackageReference "ml-stable-diffusion" */ = {
+		DDEE0000000000000000A002 /* XCLocalSwiftPackageReference "../z-image-swift-mlx" */ = {
 			isa = XCLocalSwiftPackageReference;
-			relativePath = "ml-stable-diffusion";
+			relativePath = "../z-image-swift-mlx";
+		};
+		DDEE0000000000000000B002 /* XCLocalSwiftPackageReference "AppEngines" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = AppEngines;
 		};
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		AABB15152F6995CE007A3533 /* StableDiffusion */ = {
+		DDEE0000000000000000A003 /* ZImageMLX */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = AABB15142F6995CE007A3533 /* XCLocalSwiftPackageReference "ml-stable-diffusion" */;
-			productName = StableDiffusion;
+			package = DDEE0000000000000000A002 /* XCLocalSwiftPackageReference "../z-image-swift-mlx" */;
+			productName = ZImageMLX;
+		};
+		DDEE0000000000000000B003 /* AppEngines */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = DDEE0000000000000000B002 /* XCLocalSwiftPackageReference "AppEngines" */;
+			productName = AppEngines;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

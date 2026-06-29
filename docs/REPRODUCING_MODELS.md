@@ -1,244 +1,250 @@
 # Reproducing Model Resources
 
-This guide explains how to regenerate the local Core ML resources used by
-MobileDiffuser. Model weights are not included in the GitHub repository.
+This guide explains how to reproduce the current MobileDiffuser model setup.
+The app no longer uses generated Core ML folders. Runtime weights are public
+MLX/Hugging Face checkpoints downloaded by the app or by the engine packages.
 
-## Expected Output
+Model weights are not committed to this repository.
 
-The iOS app normally downloads resource folders from its Settings panel into
-Application Support. If you are regenerating resources locally, the expected
-folder names are:
+## Repository Layout
 
-```text
-coremlsd3_2step/
-coremlsd3_4step/
-```
-
-The folder names must be preserved. You can upload them to the Hugging Face
-model repository for in-app download, or add them to the app target manually
-for local development.
-
-## 0. Prepare Environment
-
-Use Apple Silicon macOS and Python 3.11:
-
-```bash
-python3.11 -m venv .venv
-source .venv/bin/activate
-pip install -U pip
-pip install -e ml-stable-diffusion
-pip install -r scripts/requirements.txt
-```
-
-Confirm Core ML compiler is available:
-
-```bash
-xcrun coremlcompiler --help
-```
-
-## 1. Prepare Checkpoints
-
-Create a local checkpoint directory:
-
-```bash
-mkdir -p checkpoints
-```
-
-Place your distilled SD3 Medium transformer checkpoint there, for example:
+During development the app expects sibling checkouts:
 
 ```text
-checkpoints/diffusion_pytorch_model.safetensors
+~/code/
+  MobileDiffuser/
+  z-image-swift-mlx/
+  flux2-diffusion-engine/
+  swift-diffusion-core/      optional local clone; app normally sees remote git revision
+  flux-2-swift-mlx/          optional, resolved by flux2-diffusion-engine
 ```
 
-The scripts also accept absolute paths through `--ckpt-path` or `--ckpt`.
+Clone the public repos:
 
-Important: checkpoints are ignored by Git. Do not commit them.
+```bash
+git clone https://github.com/nanguoyu/MobileDiffuser
+git clone https://github.com/nanguoyu/z-image-swift-mlx
+git clone https://github.com/nanguoyu/flux2-diffusion-engine
+```
 
-## 2. Convert Split MMDiT
+Open `MobileDiffuser.xcodeproj`. The app links `../z-image-swift-mlx` and
+`AppEngines`; `AppEngines` links `../../flux2-diffusion-engine`.
 
-For a 512 x 512 SD3 Medium resource folder, use latent size 64 x 64.
+## App Download Path
 
-The current app has used a 7-piece split:
+The normal user flow is in-app download:
+
+1. Run the app.
+2. Open Models.
+3. Select a model and recipe.
+4. Download the missing components.
+5. Generate.
+
+Z-Image downloads into the app's Application Support directory through
+`ModelDownloader`. FLUX.2 components are managed by `Flux2FacadeEngine` and the
+underlying FLUX package.
+
+Settings shows the exact storage location used by the app.
+
+## Model Sources
+
+### Z-Image Turbo
 
 ```text
-conditioning + Stage0...Stage6
+repo: deepsweet/Z-Image-Turbo-6B-MLX-Q4
+layout:
+  text_encoder/*.safetensors
+  transformer/*.safetensors
+  vae/*.safetensors
+  tokenizer/*
+approx size: 5.9 GB
 ```
 
-Convert fp16 split mlpackages:
+The downloader considers the model installed only when every component index
+file exists, every shard referenced by each index exists, and no
+`*.incomplete` markers remain.
 
-```bash
-.venv/bin/python scripts/convert_sd3_medium_split_coreml.py \
-  --ckpt-path checkpoints/diffusion_pytorch_model.safetensors \
-  --latent-h 64 \
-  --latent-w 64 \
-  --batch-size 1 \
-  --stage-sizes 4,4,4,4,4,4 \
-  --ios-target iOS18 \
-  -o sd3_four_step_build_split_512
-```
+### FLUX.2 Klein
 
-Notes:
-
-- `--batch-size 1` matches distilled no-CFG inference.
-- `--stage-sizes 4,4,4,4,4,4` groups the 24 transformer blocks into 6 body
-  stages. The final projection appears as an additional output stage in the
-  generated resources.
-- If ANE compilation fails on device, try smaller stage sizes.
-
-## 3. INT8 Quantize and Compile
-
-Quantize the split MMDiT weights and compile the stages:
-
-```bash
-.venv/bin/python scripts/quantize_mmdit_for_ane.py \
-  --split-dir sd3_four_step_build_split_512 \
-  --split-out-dir sd3_four_step_build_split_512/int8 \
-  --compile-into coremlsd3_4step \
-  --ios-deployment-target 18.2 \
-  --mode linear_symmetric
-```
-
-Expected result:
+The app manages FLUX as separate recipe components:
 
 ```text
-coremlsd3_4step/MultiModalDiffusionTransformerConditioning.mlmodelc
-coremlsd3_4step/MultiModalDiffusionTransformerStage0.mlmodelc
-...
-coremlsd3_4step/MultiModalDiffusionTransformerStage6.mlmodelc
+transformer 16-bit: black-forest-labs/FLUX.2-klein-4B
+transformer 8-bit:  black-forest-labs/FLUX.2-klein-4B
+transformer 4-bit:  mlx-community/flux2-klein-4b-4bit
+Qwen3 encoder 8-bit: lmstudio-community/Qwen3-4B-MLX-8bit
+Qwen3 encoder 4-bit: lmstudio-community/Qwen3-4B-MLX-4bit
+small decoder:       black-forest-labs/FLUX.2-small-decoder
+standard VAE:        black-forest-labs/FLUX.2-klein-4B
 ```
 
-## 4. Add Shared Text/VAE Resources
+The 4-bit transformer path uses the pre-quantized checkpoint. It must load
+packed 4-bit weights directly, not bf16 weights followed by load-time
+quantization.
 
-The app also needs:
+The decoder component is also the VAE *encoder* used by image-to-image:
+reference images are VAE-encoded into conditioning tokens, and that encode runs
+on whichever decoder checkpoint is installed. On iPhone the small decoder file
+supplies that encoder, so no extra download is needed for i2i.
 
-```text
-TextEncoder.mlmodelc
-TextEncoder2.mlmodelc
-VAEDecoder.mlmodelc
-vocab.json
-merges.txt
-```
+## Building the App
 
-If you already have a compatible SD3 Medium resource folder, copy them:
+Set local signing without committing your Team ID:
 
 ```bash
-cp -R coremlsd3_2step/TextEncoder.mlmodelc coremlsd3_4step/TextEncoder.mlmodelc
-cp -R coremlsd3_2step/TextEncoder2.mlmodelc coremlsd3_4step/TextEncoder2.mlmodelc
-cp -R coremlsd3_2step/VAEDecoder.mlmodelc coremlsd3_4step/VAEDecoder.mlmodelc
-cp coremlsd3_2step/vocab.json coremlsd3_4step/vocab.json
-cp coremlsd3_2step/merges.txt coremlsd3_4step/merges.txt
+cp Signing.xcconfig.example Signing.xcconfig
+# edit Signing.xcconfig and set DEVELOPMENT_TEAM
 ```
 
-If you need to regenerate those resources from Hugging Face, use the upstream
-Core ML Stable Diffusion converter through the patched local package:
-
-```bash
-.venv/bin/python -m python_coreml_stable_diffusion.torch2coreml \
-  --model-version stabilityai/stable-diffusion-3-medium \
-  --sd3-version \
-  --convert-text-encoder \
-  --convert-vae-decoder \
-  --latent-h 64 \
-  --latent-w 64 \
-  --min-deployment-target iOS18 \
-  -o sd3_build_components
-```
-
-Then compile/copy the produced text encoder and VAE decoder resources into the
-target folder. Exact output names can vary with converter versions; inspect the
-generated `sd3_build_components` directory.
-
-## 5. Build a 2-Step Resource Folder
-
-The app treats 2-step and 4-step as separate resource folders because they may
-come from different distilled checkpoints.
-
-If your two-step checkpoint has the same SD3 Medium architecture, run the same
-split conversion but compile into `coremlsd3_2step`:
-
-```bash
-.venv/bin/python scripts/convert_sd3_medium_split_coreml.py \
-  --ckpt-path checkpoints/diffusion_pytorch_model_2step.safetensors \
-  --latent-h 64 \
-  --latent-w 64 \
-  --batch-size 1 \
-  --stage-sizes 4,4,4,4,4,4 \
-  --ios-target iOS18 \
-  -o sd3_two_step_build_split_512
-
-.venv/bin/python scripts/quantize_mmdit_for_ane.py \
-  --split-dir sd3_two_step_build_split_512 \
-  --split-out-dir sd3_two_step_build_split_512/int8 \
-  --compile-into coremlsd3_2step \
-  --ios-deployment-target 18.2 \
-  --mode linear_symmetric
-```
-
-Then add the shared text/VAE/tokenizer resources to `coremlsd3_2step`.
-
-## 6. Verify Resource Folders
-
-Check top-level contents:
-
-```bash
-find coremlsd3_2step -maxdepth 1 -mindepth 1 -print | sort
-find coremlsd3_4step -maxdepth 1 -mindepth 1 -print | sort
-du -sh coremlsd3_2step coremlsd3_4step
-```
-
-Each folder is expected to be several GB. Current local builds are around 2.7
-GB per folder.
-
-## 7. Use the Resources
-
-The default app path is in-app download from the Hugging Face model repository.
-After uploading regenerated resources there, launch the app, open Settings, and
-download the selected model.
-
-For local development you may also add `coremlsd3_2step` and/or
-`coremlsd3_4step` to the Xcode target as folder references. This is optional
-and is not required for a fresh open-source build.
-
-## 8. Build
-
-For local source validation without signing:
+Build for macOS:
 
 ```bash
 xcodebuild \
   -project MobileDiffuser.xcodeproj \
   -scheme MobileDiffuser \
   -configuration Debug \
-  -destination generic/platform=iOS \
+  -destination 'platform=macOS' \
+  build
+```
+
+Build for iOS without signing:
+
+```bash
+xcodebuild \
+  -project MobileDiffuser.xcodeproj \
+  -scheme MobileDiffuser \
+  -configuration Debug \
+  -destination 'generic/platform=iOS' \
   CODE_SIGNING_ALLOWED=NO \
   build
 ```
 
-For device deployment, open Xcode and set your own signing team.
+For device deployment, use Xcode with a valid signing team and an installed iOS
+SDK compatible with the device OS.
 
-## 9. Device Validation
+## CLI Validation
 
-Run on a physical iPhone and watch Xcode logs:
+The engine repos include small CLIs for model-level validation.
 
-```text
-[SD3] requested fallback order: aneFirst
-[SD3] using split MMDiT: 7 stages + fused AdaLN
-[MEM] before pipeline build
-[MEM] after pipeline build
-[MEM] step 1/4
-[MEM] after generateImages
+### Z-Image
+
+```bash
+cd ../z-image-swift-mlx
+swift run zimage-demo <model-dir> "a red panda on a mossy rock" 1024 8 out.png
 ```
 
-If you see ANE compiler failures, regenerate with smaller stages or clear the
-on-device app install and ANE cache by rebooting the device.
+`<model-dir>` is a local checkout/download of
+`deepsweet/Z-Image-Turbo-6B-MLX-Q4`.
+
+### FLUX.2
+
+```bash
+cd ../flux2-diffusion-engine
+swift run flux2-demo "a red panda on a mossy rock"
+```
+
+For `swift run`, MLX may not find its Metal library. The most reliable path is
+to run through Xcode. If using CLI, copy an Xcode-built MLX
+`default.metallib` to `mlx.metallib` next to the built executable and ensure the
+executable has `/usr/lib` on its rpath. The demo targets already include the
+rpath fix.
+
+## Tests
+
+Use Xcode/xcodebuild for MLX package tests when possible. Plain `swift test`
+often fails in MLX packages because the CLI test runner does not automatically
+bundle `default.metallib`.
+
+Useful test groups:
+
+```text
+swift-diffusion-core:
+  sampler schedule
+  memory governor
+  MLXDiffusionEngine resident vs streaming lifecycle
+  RangedFileWeightSource
+
+z-image-swift-mlx:
+  component source routing
+  per-block load equivalence
+  streaming block lifecycle
+  optional real-checkpoint streaming parity
+```
+
+The real-checkpoint Z-Image parity test is opt-in. Set:
+
+```bash
+ZIMAGE_CHECKPOINT=/path/to/Z-Image-Turbo-6B-MLX-Q4
+```
+
+It compares resident and streamed denoise results on the same checkpoint.
+
+## Device Validation
+
+For iPhone runs, collect:
+
+```text
+device model:
+iOS version:
+Xcode version:
+model:
+recipe:
+size:
+steps:
+seed:
+generation time:
+peak resident memory shown in Create:
+thermal state, if known:
+jetsam log, if any:
+```
+
+Expected current validated paths:
+
+```text
+Z-Image Turbo:
+  iPhone 16 Pro
+  block streaming
+  512px default
+  about 2.2 GB measured peak in the validated run
+
+FLUX.2 Klein:
+  iPhone 16 Pro
+  4-bit transformer, 4-bit encoder, small decoder
+
+  text-to-image 512px, 4 steps
+    resident facade
+    about 4.3 GB peak, about 1m11s
+
+  text-to-image 1024px
+    block-streaming transformer (one block resident at a time)
+    conv-striped VAE decode (seam-free, bit-exact)
+    about 3.83 GB peak, about 4m22s
+
+  image-to-image 512px (reference-context, single 512x512 reference)
+    block-streaming transformer
+    about 3.45 GB peak, about 1m49s
+```
+
+Image-to-image on iPhone is reference-context: 1-3 references on macOS, a single
+512x512 reference on iPhone. There is no strength slider; the output denoises
+from pure noise while attending to the reference. The iPhone path streams the
+transformer so the reference VAE is freed before the transformer runs; higher
+i2i output resolution and multi-reference i2i on iPhone are not yet supported.
+
+1024px on iPhone with the FLUX standard VAE should still be treated as
+experimental; the validated 1024 path uses the small decoder with conv-striped
+decode.
 
 ## Cleanup
 
-After validating the app, large intermediate folders can be deleted:
+Delete downloaded weights from the app's Models screen or Settings -> Manage
+models. For package CLI experiments, delete the local Hugging Face model folders
+you downloaded manually.
 
-```bash
-rm -rf sd3_four_step_build_split_512
-rm -rf sd3_two_step_build_split_512
-```
+Do not commit:
 
-Do not delete `coremlsd3_2step/` or `coremlsd3_4step/` if you still want to run
-the app locally.
+- model weights,
+- `.safetensors` files,
+- generated images,
+- `Signing.xcconfig`,
+- Xcode user data.

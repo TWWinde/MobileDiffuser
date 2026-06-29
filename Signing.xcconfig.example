@@ -1,0 +1,6 @@
+// Copy this file to `Signing.xcconfig` (gitignored) and set your Team ID + bundle ID so you
+// can code-sign locally without committing them. Xcode reads it via the project's base
+// configuration; the tracked project keeps these out of the committed pbxproj.
+DEVELOPMENT_TEAM =
+CODE_SIGN_STYLE = Automatic
+PRODUCT_BUNDLE_IDENTIFIER = com.example.MobileDiffuser
