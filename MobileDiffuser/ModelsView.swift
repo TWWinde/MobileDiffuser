@@ -272,6 +272,7 @@ private struct ModelDetail: View {
                 Spacer()
                 Text("\(ByteCountFormatter.string(fromByteCount: recipe.bytesOnDisk, countStyle: .file)) on disk")
                     .font(.caption2).foregroundStyle(Theme.textTertiary)
+                    .lineLimit(1).fixedSize()
             }
             VStack(spacing: 0) {
                 ForEach(Array(recipe.components.enumerated()), id: \.element.id) { index, c in
@@ -304,8 +305,10 @@ private struct ModelDetail: View {
                 if !c.subtitle.isEmpty {
                     Text(c.subtitle).font(.caption2).foregroundStyle(Theme.textTertiary)
                 }
+                // Show the FULL HuggingFace id — shrink to fit one line rather than middle-truncating it
+                // to "black-fores…klein-4B" (middle-truncation kept only as a last resort past 0.6 scale).
                 Text(c.repo).font(.caption2.monospaced()).foregroundStyle(Theme.textTertiary)
-                    .lineLimit(1).truncationMode(.middle)
+                    .lineLimit(1).minimumScaleFactor(0.6).truncationMode(.middle)
                 // While THIS component is downloading, show its live bytes / speed / ETA (the shared meter
                 // tracks the one active download). componentProgress is non-nil only for the active id.
                 if model.componentProgress(c.id, model: item) != nil, let detail = model.downloadMeter.compactDetail {
