@@ -157,7 +157,7 @@ struct HeroCanvas: View {
                         Text(detail)
                             .font(.caption.monospacedDigit())
                             .foregroundStyle(Theme.textSecondary)
-                            .lineLimit(1)
+                            .lineLimit(1).minimumScaleFactor(0.7)
                             .accessibilityLabel("Download progress: \(detail)")
                     }
                     Button { model.cancelOperation() } label: {

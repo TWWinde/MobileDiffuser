@@ -150,6 +150,17 @@ struct DownloadMeter {
         if let eta = etaSeconds { parts.append("~\(formatETA(eta))") }
         return parts.joined(separator: " · ")
     }
+
+    /// Like `detail` but WITHOUT the total — for a narrow row that already shows the size in another
+    /// column (the component rows). "102.7 MB · 12 MB/s · ~3m left".
+    var compactDetail: String? {
+        guard totalBytes > 0 else { return nil }
+        let f = ByteCountFormatter()
+        var parts = [f.string(fromByteCount: downloadedBytes)]
+        if bytesPerSecond > 1 { parts.append("\(f.string(fromByteCount: Int64(bytesPerSecond)))/s") }
+        if let eta = etaSeconds { parts.append("~\(formatETA(eta))") }
+        return parts.joined(separator: " · ")
+    }
 }
 
 /// Drives any catalog model through a `DiffusionEngine` facade (Z-Image and — on macOS — FLUX.2),

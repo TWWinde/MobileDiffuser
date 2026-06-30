@@ -124,9 +124,9 @@ struct ModelAction: View {
                     ProgressView(value: f).frame(width: 90).tint(Theme.accent)
                     Text("\(Int(f * 100))%").font(.caption2).monospacedDigit().foregroundStyle(Theme.textSecondary)
                 }
-                if let detail = model.downloadMeter.detail {
+                if let detail = model.downloadMeter.compactDetail {
                     Text(detail).font(.caption2.monospacedDigit()).foregroundStyle(Theme.textTertiary)
-                        .lineLimit(1).truncationMode(.tail)
+                        .lineLimit(1).minimumScaleFactor(0.6)
                 }
             }
             .accessibilityElement(children: .ignore)
@@ -182,15 +182,16 @@ private struct ModelDetail: View {
         }
         .background(Theme.bg)
         .scrollBounceBehavior(.basedOnSize)
-        .confirmationDialog("Remove all \(item.displayName) weights?",
-                            isPresented: $confirmRemoveAll, titleVisibility: .visible) {
+        // Centered alerts (not confirmationDialog) — on iOS the dialog can render as a popover anchored to
+        // the wrong row; an alert is always a centered modal, which is also fine for a destructive confirm.
+        .alert("Remove all \(item.displayName) weights?", isPresented: $confirmRemoveAll) {
             Button("Remove all", role: .destructive) { Task { await model.delete(item) } }
             Button("Cancel", role: .cancel) {}
         } message: { Text("Frees the disk space. You can download it again anytime.") }
-        .confirmationDialog(pendingDelete.map { "Delete \($0.title)?" } ?? "",
-                            isPresented: Binding(get: { pendingDelete != nil },
-                                                 set: { if !$0 { pendingDelete = nil } }),
-                            titleVisibility: .visible, presenting: pendingDelete) { c in
+        .alert(pendingDelete.map { "Delete \($0.title)?" } ?? "",
+               isPresented: Binding(get: { pendingDelete != nil },
+                                    set: { if !$0 { pendingDelete = nil } }),
+               presenting: pendingDelete) { c in
             Button("Delete", role: .destructive) { Task { await model.removeComponent(c.id, model: item) } }
             Button("Cancel", role: .cancel) {}
         } message: { c in
@@ -218,7 +219,8 @@ private struct ModelDetail: View {
             ProgressView(value: f).tint(Theme.accent)
             // Live bytes / speed / ETA when the meter has it, else the plain percentage.
             Text(model.downloadMeter.detail ?? "Downloading… \(Int(f * 100))%")
-                .font(.caption).monospacedDigit().foregroundStyle(Theme.textSecondary).lineLimit(1)
+                .font(.caption).monospacedDigit().foregroundStyle(Theme.textSecondary)
+                .lineLimit(1).minimumScaleFactor(0.7)
         }.frame(maxWidth: .infinity)
     }
 
@@ -301,9 +303,9 @@ private struct ModelDetail: View {
                     .lineLimit(1).truncationMode(.middle)
                 // While THIS component is downloading, show its live bytes / speed / ETA (the shared meter
                 // tracks the one active download). componentProgress is non-nil only for the active id.
-                if model.componentProgress(c.id, model: item) != nil, let detail = model.downloadMeter.detail {
+                if model.componentProgress(c.id, model: item) != nil, let detail = model.downloadMeter.compactDetail {
                     Text(detail).font(.caption2.monospacedDigit().weight(.medium)).foregroundStyle(Theme.accent)
-                        .lineLimit(1).truncationMode(.tail)
+                        .lineLimit(1).minimumScaleFactor(0.6)   // shrink to fit, never truncate
                 }
             }
             Spacer(minLength: Theme.Space.sm)
