@@ -172,14 +172,62 @@ actor LibraryStore {
 }
 
 enum ImageCodec {
+    /// PNG bytes with no embedded metadata. Used for the Library's durable copy on disk — keep this
+    /// signature stable; `LibraryStore` depends on it.
     static func pngData(_ cg: CGImage) -> Data? {
+        encode(cg, properties: nil)
+    }
+
+    /// XMP namespace + prefix under which the a1111-style `parameters` block is written. A custom
+    /// namespace is the only path ImageIO actually persists for arbitrary keys — PNG's text dictionary
+    /// only round-trips its known `kCGImagePropertyPNG*` keys, so a bare "parameters" dict entry is
+    /// silently dropped (verified). XMP serializes into the PNG as an iTXt packet.
+    private static let metadataNamespace = "http://mobilediffuser.app/ns/1.0/"
+    private static let metadataPrefix = "md"
+
+    /// PNG bytes that embed provenance, so an exported/shared image carries its prompt, seed, model,
+    /// and size/steps. Two channels are written, both verified to round-trip via `CGImageSource`:
+    ///   • `Description` (PNG dictionary) — a compact "prompt | seed: N | model | 512px/4steps" line,
+    ///     surfaced by Preview, Finder "Get Info", `sips`, and most image tools (also as `dc:description`).
+    ///   • `md:parameters` (XMP) — an a1111-style "prompt\nSteps: N, Seed: N, Model: X, Size: WxH" block
+    ///     so other tooling can recover the generation settings.
+    static func pngData(for gen: Generation) -> Data? {
+        let recipe = "\(gen.size)px/\(gen.steps)steps"
+        let description = "\(gen.prompt) | seed: \(gen.seed) | \(gen.modelName) | \(recipe)"
+        let parameters = """
+        \(gen.prompt)
+        Steps: \(gen.steps), Seed: \(gen.seed), Model: \(gen.modelName), Size: \(gen.size)x\(gen.size)
+        """
+        let png: [CFString: Any] = [kCGImagePropertyPNGDescription: description]
+        let properties: [CFString: Any] = [kCGImagePropertyPNGDictionary: png]
+        return encode(gen.image, properties: properties as CFDictionary, parameters: parameters)
+    }
+
+    private static func encode(_ cg: CGImage, properties: CFDictionary?, parameters: String? = nil) -> Data? {
         let data = NSMutableData()
         guard let dest = CGImageDestinationCreateWithData(data, UTType.png.identifier as CFString, 1, nil) else {
             return nil
         }
-        CGImageDestinationAddImage(dest, cg, nil)
+        if let parameters, let metadata = parametersMetadata(parameters) {
+            CGImageDestinationAddImageAndMetadata(dest, cg, metadata, properties)
+        } else {
+            CGImageDestinationAddImage(dest, cg, properties)
+        }
         guard CGImageDestinationFinalize(dest) else { return nil }
         return data as Data
+    }
+
+    /// Build a `CGImageMetadata` carrying `md:parameters` under our custom XMP namespace.
+    private static func parametersMetadata(_ parameters: String) -> CGImageMetadata? {
+        let metadata = CGImageMetadataCreateMutable()
+        guard CGImageMetadataRegisterNamespaceForPrefix(
+                metadata, metadataNamespace as CFString, metadataPrefix as CFString, nil),
+              let tag = CGImageMetadataTagCreate(
+                metadataNamespace as CFString, metadataPrefix as CFString,
+                "parameters" as CFString, .string, parameters as CFString),
+              CGImageMetadataSetTagWithPath(metadata, nil, "\(metadataPrefix):parameters" as CFString, tag)
+        else { return nil }
+        return metadata
     }
 
     static func cgImage(from url: URL) -> CGImage? {

@@ -293,8 +293,6 @@ MLX tests should be run with Xcode/xcodebuild where possible, because plain
 
 ## Current Limitations
 
-- Library persistence is in-session only; generated images are not yet stored on
-  disk as an app library.
 - img2img is FLUX.2 reference-context only. Z-Image classic (strength-based)
   img2img is not implemented.
 - iPhone img2img is a single reference at 512px output. Multi-reference streaming

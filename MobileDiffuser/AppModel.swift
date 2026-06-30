@@ -100,6 +100,69 @@ func formatDuration(_ seconds: TimeInterval) -> String {
     return "\(m)m \(String(format: "%02d", s))s"
 }
 
+/// Compact "~3m left" / "~12s left" / "~1h 05m left" for a download ETA.
+private func formatETA(_ seconds: Double) -> String {
+    let s = Int(seconds.rounded())
+    if s < 60 { return "\(max(1, s))s left" }
+    if s < 3600 { return "\(s / 60)m \(String(format: "%02d", s % 60))s left" }
+    return "\(s / 3600)h \(String(format: "%02d", (s % 3600) / 60))m left"
+}
+
+/// Tracks a download's bytes / throughput / ETA from the fraction reported by the downloader plus the
+/// known total size, so the UI can show "2.3 GB / 4.6 GB · 12 MB/s · ~3m left" instead of a bare bar.
+/// Throughput is a smoothed (EMA) estimate sampled at most a few times a second so it doesn't jitter.
+struct DownloadMeter {
+    private(set) var totalBytes: Int64 = 0
+    private(set) var downloadedBytes: Int64 = 0
+    private(set) var bytesPerSecond: Double = 0
+    private var lastSampleAt: Date?
+    private var lastSampleBytes: Int64 = 0
+
+    /// Begin a new download of `total` bytes (0 ⇒ unknown total; the meter then shows nothing).
+    mutating func start(total: Int64) {
+        totalBytes = max(0, total); downloadedBytes = 0; bytesPerSecond = 0
+        lastSampleAt = nil; lastSampleBytes = 0
+    }
+
+    /// Feed a 0…1 fraction. Re-derives bytes and updates the smoothed throughput (sampled ≥0.4s apart).
+    mutating func update(fraction: Double, now: Date = Date()) {
+        guard totalBytes > 0 else { return }
+        downloadedBytes = Int64((min(max(fraction, 0), 1)) * Double(totalBytes))
+        guard let last = lastSampleAt else { lastSampleAt = now; lastSampleBytes = downloadedBytes; return }
+        let dt = now.timeIntervalSince(last)
+        guard dt >= 0.4 else { return }
+        let instantaneous = max(0, Double(downloadedBytes - lastSampleBytes)) / dt
+        bytesPerSecond = bytesPerSecond == 0 ? instantaneous : bytesPerSecond * 0.6 + instantaneous * 0.4
+        lastSampleAt = now; lastSampleBytes = downloadedBytes
+    }
+
+    var etaSeconds: Double? {
+        guard bytesPerSecond > 1, downloadedBytes < totalBytes else { return nil }
+        return Double(totalBytes - downloadedBytes) / bytesPerSecond
+    }
+
+    /// "2.3 GB / 4.6 GB · 12 MB/s · ~3m left" — speed/ETA appear once there's a stable estimate.
+    var detail: String? {
+        guard totalBytes > 0 else { return nil }
+        let f = ByteCountFormatter()
+        var parts = ["\(f.string(fromByteCount: downloadedBytes)) / \(f.string(fromByteCount: totalBytes))"]
+        if bytesPerSecond > 1 { parts.append("\(f.string(fromByteCount: Int64(bytesPerSecond)))/s") }
+        if let eta = etaSeconds { parts.append("~\(formatETA(eta))") }
+        return parts.joined(separator: " · ")
+    }
+
+    /// Like `detail` but WITHOUT the total — for a narrow row that already shows the size in another
+    /// column (the component rows). "102.7 MB · 12 MB/s · ~3m left".
+    var compactDetail: String? {
+        guard totalBytes > 0 else { return nil }
+        let f = ByteCountFormatter()
+        var parts = [f.string(fromByteCount: downloadedBytes)]
+        if bytesPerSecond > 1 { parts.append("\(f.string(fromByteCount: Int64(bytesPerSecond)))/s") }
+        if let eta = etaSeconds { parts.append("~\(formatETA(eta))") }
+        return parts.joined(separator: " · ")
+    }
+}
+
 /// Drives any catalog model through a `DiffusionEngine` facade (Z-Image and — on macOS — FLUX.2),
 /// with model switching. UI state lives on the main actor; the engines are actors, so their heavy
 /// MLX work runs off-main without blocking the UI. Z-Image weights are downloaded in-app first;
@@ -210,6 +273,9 @@ final class AppModel {
     /// Which FLUX component (by id) is downloading + its 0...1 progress, for the detail's list.
     var fluxComponentDownloadID: String?
     var fluxComponentFraction: Double = 0
+    /// Bytes / throughput / ETA for the active download (any of: a FLUX component, a FLUX recipe, or
+    /// Z-Image), so the progress UI can show "2.3 GB / 4.6 GB · 12 MB/s · ~3m left", not a bare bar.
+    var downloadMeter = DownloadMeter()
     /// A failed component download, surfaced as inline Retry — kept off the shared generation `phase`
     /// so a failed Get never leaves a sticky "Failed" on the Create canvas.
     var fluxComponentError: (id: String, message: String)?
@@ -217,6 +283,27 @@ final class AppModel {
     static func friendlyDownloadError(_ error: Error) -> String {
         if let urlError = error as? URLError, urlError.code == .notConnectedToInternet { return "No connection" }
         return "Download failed"
+    }
+
+    /// A short, user-facing message for a generation/load failure — shown on the canvas instead of a
+    /// raw `String(describing:)` enum dump, and paired with a Retry button (most of these recover).
+    static func friendlyError(_ error: Error) -> String {
+        if error is CancellationError { return "Cancelled" }
+        if let urlError = error as? URLError {
+            return urlError.code == .notConnectedToInternet ? "No connection" : "Network error"
+        }
+        if let e = error as? EngineError {
+            switch e {
+            case .unsupportedOnDevice:  return "This size needs more memory than this device has. Try a smaller size."
+            case .insufficientMemory:   return "Not enough free memory right now. Close some apps or pick a smaller size, then tap Generate."
+            case .pausedForHeat:        return "Paused to let your phone cool down. Tap Generate to resume once it's cooler."
+            case .decodeFailed:         return "Couldn't finish decoding the image. Tap Generate to try again."
+            case .notLoaded:            return "The model isn't loaded yet."
+            case .streamingUnavailable: return "This model needs a streaming download that isn't ready yet."
+            case .invalidRequest(let m): return m
+            }
+        }
+        return "Something went wrong. Tap Generate to try again, or pick a smaller size."
     }
 
     /// The individually-managed FLUX components and their current on-disk state.
@@ -234,6 +321,7 @@ final class AppModel {
     private func downloadFluxComponentUnlocked(_ id: String, operationID: UUID) async {
         fluxComponentError = nil
         fluxComponentDownloadID = id; fluxComponentFraction = 0
+        downloadMeter.start(total: fluxComponents().first { $0.id == id }?.bytes ?? 0)
         defer { fluxComponentDownloadID = nil; componentsRevision += 1 }
         do {
             try await Flux2FacadeEngine.downloadComponent(id) { fraction in
@@ -241,6 +329,7 @@ final class AppModel {
                 Task { @MainActor in
                     if self.activeOperationID == operationID, self.fluxComponentDownloadID == id {
                         self.fluxComponentFraction = fraction
+                        self.downloadMeter.update(fraction: fraction)
                     }
                 }
             }
@@ -426,7 +515,7 @@ final class AppModel {
             phase = .cancelled
             componentsRevision += 1
         } catch {
-            phase = .failed(String(describing: error))
+            phase = .failed(Self.friendlyError(error))
         }
     }
 
@@ -546,7 +635,7 @@ final class AppModel {
                 self.phase = .cancelled
                 self.componentsRevision += 1
             } catch {
-                self.phase = .failed(String(describing: error))
+                self.phase = .failed(Self.friendlyError(error))
             }
         }
     }
@@ -573,7 +662,7 @@ final class AppModel {
                     self.phase = .cancelled
                     self.componentsRevision += 1
                 } catch {
-                    self.phase = .failed(String(describing: error))
+                    self.phase = .failed(Self.friendlyError(error))
                 }
             }
         }
@@ -709,6 +798,7 @@ final class AppModel {
         defer { UIApplication.shared.isIdleTimerDisabled = false }
         #endif
         phase = .downloading(0)
+        downloadMeter.start(total: model.variants[0].approximateBytes)
         switch model.family {
         case .zImage:
             let repo = model.variants[0].source.huggingFaceRepo
@@ -716,6 +806,7 @@ final class AppModel {
                 Task { @MainActor in
                     if self.activeOperationID == operationID, case .downloading = self.phase {
                         self.phase = .downloading(fraction)
+                        self.downloadMeter.update(fraction: fraction)
                     }
                 }
             }
@@ -724,6 +815,7 @@ final class AppModel {
                 Task { @MainActor in
                     if self.activeOperationID == operationID, case .downloading = self.phase {
                         self.phase = .downloading(fraction)
+                        self.downloadMeter.update(fraction: fraction)
                     }
                 }
             }
@@ -889,7 +981,7 @@ final class AppModel {
         } catch {
             await unloadOneShotStreamingEngineIfNeeded(for: model)
             guard activeOperationID == operationID else { return }
-            phase = .failed(String(describing: error))
+            phase = .failed(Self.friendlyError(error))
         }
     }
 
@@ -1019,11 +1111,11 @@ final class AppModel {
     private var fluxEffectiveSize: Int { (device.isPhone && !referenceImages.isEmpty) ? min(size, 512) : size }
 
     /// Image token count the streaming engine plans for: output tokens + (i2i) the reference budget.
-    /// The reference is capped to 512² ⇒ ≤1024 tokens; plan for the worst case so the memory gate isn't
+    /// The reference is capped to 768² ⇒ ≤2304 tokens; plan for the worst case so the memory gate isn't
     /// under-budgeted (the actual run derives the real count from the encoded reference).
     private var streamingImageSeqLen: Int {
         let out = (fluxEffectiveSize / 16) * (fluxEffectiveSize / 16)
-        let ref = referenceImages.isEmpty ? 0 : (512 / 16) * (512 / 16)   // 1024 worst-case ref tokens
+        let ref = referenceImages.isEmpty ? 0 : (768 / 16) * (768 / 16)   // 2304 worst-case ref tokens
         return out + ref
     }
 
@@ -1089,22 +1181,63 @@ final class AppModel {
         ImageCodec.pngData(cg)
     }
 
+    /// PNG bytes that embed provenance (prompt/seed/model/size·steps) via PNG text chunks — used by
+    /// the Library export, ShareLink, and Save-to-Photos so a saved image keeps its recipe. Cross-platform.
+    func pngData(for gen: Generation) -> Data? {
+        ImageCodec.pngData(for: gen)
+    }
+
     #if os(iOS)
     /// Save a generated image to the user's Photo library (add-only authorization). Denial is
     /// non-fatal — the image stays in the in-app Library. iOS only; macOS uses a save panel in-view.
-    func exportImage(_ cg: CGImage) {
-        let image = UIImage(cgImage: cg)
+    ///
+    /// When a `Generation` is in scope we save from a metadata-bearing PNG file (via
+    /// `forAssetCreatedFromResourceAtURL`) rather than `creationRequestForAsset(from: UIImage)`, which
+    /// would drop the PNG text chunks. Photos may still strip some metadata on its own — that's fine;
+    /// the file export / share path is the one that reliably carries provenance.
+    func exportImage(_ gen: Generation) {
+        // Prefer the metadata-bearing PNG on disk; fall back to the bare image if encoding fails.
+        let url = ImageCodec.pngData(for: gen).flatMap { writeTempPNG($0, for: gen) }
         PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
             guard status == .authorized || status == .limited else {
                 Task { @MainActor in self.showToast("Photos access denied") }
+                if let url { try? FileManager.default.removeItem(at: url) }
                 return
             }
             PHPhotoLibrary.shared().performChanges {
-                PHAssetChangeRequest.creationRequestForAsset(from: image)
+                if let url {
+                    let request = PHAssetCreationRequest.forAsset()
+                    request.addResource(with: .photo, fileURL: url, options: nil)
+                } else {
+                    PHAssetChangeRequest.creationRequestForAsset(from: UIImage(cgImage: gen.image))
+                }
             } completionHandler: { success, _ in
+                if let url { try? FileManager.default.removeItem(at: url) }
                 Task { @MainActor in self.showToast(success ? "Saved to Photos" : "Couldn’t save") }
             }
         }
     }
     #endif
+
+    /// Write PNG bytes to a uniquely-named temp file with a friendly basename, for ShareLink and the
+    /// iOS Photos resource path. Returns `nil` on failure. Callers own cleanup.
+    func writeTempPNG(_ data: Data, for gen: Generation) -> URL? {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("share-\(gen.id.uuidString)", isDirectory: true)
+        let url = dir.appendingPathComponent("\(exportBasename(for: gen)).png")
+        do {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            try data.write(to: url, options: .atomic)
+            return url
+        } catch {
+            return nil
+        }
+    }
+
+    /// A stable, descriptive basename (no extension) for exported/shared files.
+    func exportBasename(for gen: Generation) -> String {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd_HH-mm-ss"
+        return "MobileDiffuser_\(f.string(from: gen.date))"
+    }
 }

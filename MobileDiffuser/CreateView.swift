@@ -21,6 +21,7 @@ struct CreateView: View {
                 PromptBar(model: model)
             }
         }
+        .toastBanner(model.toast)   // "Saved to Photos" / "Cancelled" now show on Create, not only Library
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button { showModels = true } label: {
@@ -41,7 +42,7 @@ struct CreateView: View {
                     Image(systemName: "cube.box.fill").foregroundStyle(Theme.accent)
                     Text(model.selected.displayName)
                         .font(.subheadline.weight(.semibold)).foregroundStyle(Theme.textPrimary)
-                        .lineLimit(1)
+                        .lineLimit(1).minimumScaleFactor(0.7).layoutPriority(1)
                     FitBadge(capabilities: model.capabilities(for: model.selected))
                     Spacer(minLength: Theme.Space.sm)
                     Image(systemName: "chevron.right").font(.caption2).foregroundStyle(Theme.textTertiary)
@@ -49,7 +50,7 @@ struct CreateView: View {
                 HStack(spacing: Theme.Space.sm) {
                     Text(model.statusText).font(.caption2)
                         .foregroundStyle(model.isFailed ? Theme.danger : Theme.textSecondary)
-                        .lineLimit(1)
+                        .lineLimit(1).minimumScaleFactor(0.8)
                     Spacer(minLength: Theme.Space.sm)
                     if let memory = model.memoryReadout {
                         Text(memory).font(.caption2).monospacedDigit()
@@ -114,6 +115,15 @@ struct HeroCanvas: View {
                     if model.isFailed {
                         Text(model.statusText).font(.caption).foregroundStyle(Theme.danger)
                             .multilineTextAlignment(.center).padding(.horizontal, Theme.Space.xl)
+                        Button { model.startGenerate() } label: {
+                            Label("Retry", systemImage: "arrow.clockwise")
+                                .font(.subheadline.weight(.medium))
+                                .padding(.horizontal, Theme.Space.lg).padding(.vertical, Theme.Space.sm)
+                                .background(Theme.surface2, in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(model.isBusy || model.prompt.isEmpty)
+                        .accessibilityLabel("Retry generation")
                     }
                 }
             }
@@ -143,6 +153,13 @@ struct HeroCanvas: View {
             } else if model.isBusy, case .downloading(let fraction) = model.phase {
                 VStack(spacing: Theme.Space.sm) {
                     ProgressView(value: fraction).tint(Theme.accent)
+                    if let detail = model.downloadMeter.detail {
+                        Text(detail)
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(Theme.textSecondary)
+                            .lineLimit(1).minimumScaleFactor(0.7)
+                            .accessibilityLabel("Download progress: \(detail)")
+                    }
                     Button { model.cancelOperation() } label: {
                         Image(systemName: "pause.fill")
                             .frame(width: 32, height: 32)
@@ -246,6 +263,16 @@ struct PromptBar: View {
                     .padding(Theme.Space.md)
                     .background(Theme.surface2, in: RoundedRectangle(cornerRadius: Theme.Radius.field, style: .continuous))
                     .overlay(RoundedRectangle(cornerRadius: Theme.Radius.field, style: .continuous).strokeBorder(Theme.hairline))
+                    .overlay(alignment: .topTrailing) {
+                        if !model.prompt.isEmpty && !model.isBusy {
+                            Button { model.prompt = "" } label: {
+                                Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                            }
+                            .buttonStyle(.plain)
+                            .padding(Theme.Space.sm)
+                            .accessibilityLabel("Clear prompt")
+                        }
+                    }
 
                 if model.selected.family == .flux2 && model.supportsReferenceImages && model.referenceImages.isEmpty { attachButton }   // empty-state first-add (Mac-only)
 
@@ -272,10 +299,17 @@ struct PromptBar: View {
                         .disabled(model.isBusy)
                 }
                 labeledControl("Seed") {
-                    SeedField(text: $model.seedText)
-                        .disabled(model.isBusy)
+                    HStack(spacing: Theme.Space.sm) {
+                        SeedField(text: $model.seedText)
+                        Button { model.seedText = String(UInt64.random(in: 0 ... 999_999)) } label: {
+                            Image(systemName: "die.face.5.fill").foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Random seed")
+                    }
+                    .disabled(model.isBusy)
                 }
-                .frame(maxWidth: 120)
+                .frame(maxWidth: 160)
             }
         }
         // Loaders are on the always-present VStack (not a conditional sub-view) so they fire from both

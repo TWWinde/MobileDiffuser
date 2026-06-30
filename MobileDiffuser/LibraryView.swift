@@ -128,6 +128,10 @@ private struct GenerationDetail: View {
     @State private var exporting = false
     #endif
 
+    /// Temp .png (with embedded metadata) backing the share sheet. Written once when the detail
+    /// appears and removed on disappear, so re-renders don't spawn extra temp files.
+    @State private var shareURL: URL?
+
     var body: some View {
         VStack(spacing: 0) {
             header
@@ -138,23 +142,16 @@ private struct GenerationDetail: View {
             content
         }
         .background(Theme.bg)
-        // Confirmation banner after Save to Photos / Export (driven by model.showToast).
-        .overlay(alignment: .bottom) {
-            if let toast = model.toast {
-                Label(toast, systemImage: "checkmark.circle.fill")
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(Theme.textPrimary)
-                    .padding(.horizontal, Theme.Space.lg).padding(.vertical, Theme.Space.md)
-                    .background(Theme.surface, in: Capsule())
-                    .overlay(Capsule().strokeBorder(Theme.hairline))
-                    .shadow(color: .black.opacity(0.15), radius: 12, y: 4)
-                    .padding(.bottom, Theme.Space.xl)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-            }
+        .onAppear {
+            if let data = model.pngData(for: gen) { shareURL = model.writeTempPNG(data, for: gen) }
         }
-        .animation(Motion.canvas, value: model.toast)
-        .confirmationDialog("Delete this generation?",
-                            isPresented: $confirmDelete, titleVisibility: .visible) {
+        .onDisappear {
+            if let url = shareURL { try? FileManager.default.removeItem(at: url) }
+            shareURL = nil
+        }
+        // Confirmation banner after Save to Photos / Export — shared with Create via `toastBanner`.
+        .toastBanner(model.toast)
+        .alert("Delete this generation?", isPresented: $confirmDelete) {
             Button("Delete", role: .destructive) {
                 model.deleteGeneration(gen)
                 dismiss()
@@ -276,6 +273,8 @@ private struct GenerationDetail: View {
 
             saveButton
 
+            shareButton
+
             Button(role: .destructive) { confirmDelete = true } label: {
                 Label("Delete", systemImage: "trash")
                     .frame(maxWidth: .infinity)
@@ -286,7 +285,7 @@ private struct GenerationDetail: View {
 
     @ViewBuilder private var saveButton: some View {
         #if os(iOS)
-        Button { model.exportImage(gen.image) } label: {
+        Button { model.exportImage(gen) } label: {
             Label("Save to Photos", systemImage: "square.and.arrow.down")
                 .frame(maxWidth: .infinity)
         }
@@ -302,24 +301,37 @@ private struct GenerationDetail: View {
         .accessibilityLabel("Export image")
         .accessibilityHint("Saves this image as a PNG file")
         .fileExporter(
+            // Metadata-bearing PNG (prompt/seed/model embedded as text chunks).
             isPresented: $exporting,
-            document: PNGDocument(data: model.pngData(gen.image)),
+            document: PNGDocument(data: model.pngData(for: gen)),
             contentType: .png,
-            defaultFilename: exportFilename
+            defaultFilename: model.exportBasename(for: gen)
         ) { result in
             if case .success = result { model.showToast("Image exported") }
         }
         #endif
     }
 
-    #if os(macOS)
-    /// A stable, descriptive default filename for the save panel.
-    private var exportFilename: String {
-        let f = DateFormatter()
-        f.dateFormat = "yyyy-MM-dd_HH-mm-ss"
-        return "MobileDiffuser_\(f.string(from: gen.date))"
+    /// System share sheet (AirDrop / Messages / Save to Files …). Shares a metadata-bearing PNG written
+    /// to a temp .png URL — a file URL shares more reliably across targets and carries a proper filename.
+    /// Cross-platform: `ShareLink` works on both iOS and macOS.
+    @ViewBuilder private var shareButton: some View {
+        if let url = shareURL {
+            ShareLink(item: url, preview: SharePreview(shareTitle, image: Image(decorative: gen.image, scale: 1))) {
+                Label("Share…", systemImage: "square.and.arrow.up")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(StudioButtonStyle(.secondary))
+            .accessibilityLabel("Share image")
+            .accessibilityHint("Opens the system share sheet")
+        }
     }
-    #endif
+
+    /// Short share-preview title: a trimmed prompt, or a stable fallback.
+    private var shareTitle: String {
+        let trimmed = gen.prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "Generated image" : String(trimmed.prefix(60))
+    }
 
     // MARK: Pieces
 

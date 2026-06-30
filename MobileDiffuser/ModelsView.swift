@@ -67,6 +67,7 @@ struct ModelCard: View {
         VStack(alignment: .leading, spacing: Theme.Space.sm) {
             HStack {
                 Text(m.displayName).font(.headline).foregroundStyle(Theme.textPrimary)
+                    .lineLimit(1).minimumScaleFactor(0.7).layoutPriority(1)
                 Spacer()
                 FitBadge(capabilities: model.capabilities(for: m))
             }
@@ -106,6 +107,7 @@ struct ModelCard: View {
             let recipeText = recipe.axes.map { $0.selectedOption?.label ?? "" }.joined(separator: " · ")
             Text(recipe.axes.isEmpty ? status : "\(recipeText) · \(status)")
                 .font(.caption2).foregroundStyle(color)
+                .lineLimit(2).minimumScaleFactor(0.85)
         }
     }
 }
@@ -119,12 +121,18 @@ struct ModelAction: View {
     var body: some View {
         let recipe = model.recipe(for: m)
         if model.selectedID == m.id, case .downloading(let f) = model.phase {
-            HStack(spacing: Theme.Space.xs) {
-                ProgressView(value: f).frame(width: 90).tint(Theme.accent)
-                Text("\(Int(f * 100))%").font(.caption2).monospacedDigit().foregroundStyle(Theme.textSecondary)
+            VStack(alignment: .trailing, spacing: 2) {
+                HStack(spacing: Theme.Space.xs) {
+                    ProgressView(value: f).frame(width: 90).tint(Theme.accent)
+                    Text("\(Int(f * 100))%").font(.caption2).monospacedDigit().foregroundStyle(Theme.textSecondary)
+                }
+                if let detail = model.downloadMeter.compactDetail {
+                    Text(detail).font(.caption2.monospacedDigit()).foregroundStyle(Theme.textTertiary)
+                        .lineLimit(1).minimumScaleFactor(0.6)
+                }
             }
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel("Downloading").accessibilityValue("\(Int(f * 100)) percent")
+            .accessibilityLabel("Downloading").accessibilityValue(model.downloadMeter.detail ?? "\(Int(f * 100)) percent")
         } else if recipe.isInstalled {
             Button { model.selectedID = m.id; dismiss() } label: {
                 Label("Use", systemImage: "wand.and.stars")
@@ -176,15 +184,16 @@ private struct ModelDetail: View {
         }
         .background(Theme.bg)
         .scrollBounceBehavior(.basedOnSize)
-        .confirmationDialog("Remove all \(item.displayName) weights?",
-                            isPresented: $confirmRemoveAll, titleVisibility: .visible) {
+        // Centered alerts (not confirmationDialog) — on iOS the dialog can render as a popover anchored to
+        // the wrong row; an alert is always a centered modal, which is also fine for a destructive confirm.
+        .alert("Remove all \(item.displayName) weights?", isPresented: $confirmRemoveAll) {
             Button("Remove all", role: .destructive) { Task { await model.delete(item) } }
             Button("Cancel", role: .cancel) {}
         } message: { Text("Frees the disk space. You can download it again anytime.") }
-        .confirmationDialog(pendingDelete.map { "Delete \($0.title)?" } ?? "",
-                            isPresented: Binding(get: { pendingDelete != nil },
-                                                 set: { if !$0 { pendingDelete = nil } }),
-                            titleVisibility: .visible, presenting: pendingDelete) { c in
+        .alert(pendingDelete.map { "Delete \($0.title)?" } ?? "",
+               isPresented: Binding(get: { pendingDelete != nil },
+                                    set: { if !$0 { pendingDelete = nil } }),
+               presenting: pendingDelete) { c in
             Button("Delete", role: .destructive) { Task { await model.removeComponent(c.id, model: item) } }
             Button("Cancel", role: .cancel) {}
         } message: { c in
@@ -210,8 +219,10 @@ private struct ModelDetail: View {
     @ViewBuilder private func modelProgress(_ f: Double) -> some View {
         VStack(spacing: Theme.Space.xs) {
             ProgressView(value: f).tint(Theme.accent)
-            Text("Downloading… \(Int(f * 100))%")
+            // Live bytes / speed / ETA when the meter has it, else the plain percentage.
+            Text(model.downloadMeter.detail ?? "Downloading… \(Int(f * 100))%")
                 .font(.caption).monospacedDigit().foregroundStyle(Theme.textSecondary)
+                .lineLimit(1).minimumScaleFactor(0.7)
         }.frame(maxWidth: .infinity)
     }
 
@@ -234,7 +245,7 @@ private struct ModelDetail: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(axis.title).font(.subheadline).foregroundStyle(Theme.textPrimary)
                 if let note = axis.selectedOption?.note, !note.isEmpty {
-                    Text(note).font(.caption2).foregroundStyle(Theme.textTertiary)
+                    Text(note).font(.caption2).foregroundStyle(Theme.textTertiary).lineLimit(2)
                 }
             }
             Spacer(minLength: Theme.Space.md)
@@ -261,6 +272,7 @@ private struct ModelDetail: View {
                 Spacer()
                 Text("\(ByteCountFormatter.string(fromByteCount: recipe.bytesOnDisk, countStyle: .file)) on disk")
                     .font(.caption2).foregroundStyle(Theme.textTertiary)
+                    .lineLimit(1).fixedSize()
             }
             VStack(spacing: 0) {
                 ForEach(Array(recipe.components.enumerated()), id: \.element.id) { index, c in
@@ -274,8 +286,11 @@ private struct ModelDetail: View {
     @ViewBuilder private func componentRow(_ c: RecipeComponent, showActive: Bool) -> some View {
         HStack(spacing: Theme.Space.md) {
             VStack(alignment: .leading, spacing: 3) {
+                // Title on its own full-width line (no longer competing with the badges, which forced it
+                // to wrap mid-word — "Klein 4B · 4-\nbit"); badges sit on the line below.
+                Text(c.title).font(.subheadline.weight(.medium)).foregroundStyle(Theme.textPrimary)
+                    .lineLimit(1).minimumScaleFactor(0.6)
                 HStack(spacing: 6) {
-                    Text(c.title).font(.subheadline.weight(.medium)).foregroundStyle(Theme.textPrimary)
                     Text(c.kind.rawValue).font(.caption2)
                         .padding(.horizontal, 7).padding(.vertical, 2)
                         .background(badgeColor(c.kind).opacity(0.18), in: Capsule())
@@ -290,12 +305,21 @@ private struct ModelDetail: View {
                 if !c.subtitle.isEmpty {
                     Text(c.subtitle).font(.caption2).foregroundStyle(Theme.textTertiary)
                 }
+                // Show the FULL HuggingFace id — shrink to fit one line rather than middle-truncating it
+                // to "black-fores…klein-4B" (middle-truncation kept only as a last resort past 0.6 scale).
                 Text(c.repo).font(.caption2.monospaced()).foregroundStyle(Theme.textTertiary)
-                    .lineLimit(1).truncationMode(.middle)
+                    .lineLimit(1).minimumScaleFactor(0.6).truncationMode(.middle)
+                // While THIS component is downloading, show its live bytes / speed / ETA (the shared meter
+                // tracks the one active download). componentProgress is non-nil only for the active id.
+                if model.componentProgress(c.id, model: item) != nil, let detail = model.downloadMeter.compactDetail {
+                    Text(detail).font(.caption2.monospacedDigit().weight(.medium)).foregroundStyle(Theme.accent)
+                        .lineLimit(1).minimumScaleFactor(0.6)   // shrink to fit, never truncate
+                }
             }
             Spacer(minLength: Theme.Space.sm)
             Text(ByteCountFormatter.string(fromByteCount: c.bytes, countStyle: .file))
                 .font(.caption).foregroundStyle(Theme.textSecondary)
+                .lineLimit(1).fixedSize()   // "2.18 GB" never wraps — keep it from squeezing the title
             componentControl(c).frame(width: 84, alignment: .trailing)
         }
         .frame(minHeight: 52)
