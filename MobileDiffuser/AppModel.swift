@@ -1039,11 +1039,11 @@ final class AppModel {
     private var fluxEffectiveSize: Int { (device.isPhone && !referenceImages.isEmpty) ? min(size, 512) : size }
 
     /// Image token count the streaming engine plans for: output tokens + (i2i) the reference budget.
-    /// The reference is capped to 512² ⇒ ≤1024 tokens; plan for the worst case so the memory gate isn't
+    /// The reference is capped to 768² ⇒ ≤2304 tokens; plan for the worst case so the memory gate isn't
     /// under-budgeted (the actual run derives the real count from the encoded reference).
     private var streamingImageSeqLen: Int {
         let out = (fluxEffectiveSize / 16) * (fluxEffectiveSize / 16)
-        let ref = referenceImages.isEmpty ? 0 : (512 / 16) * (512 / 16)   // 1024 worst-case ref tokens
+        let ref = referenceImages.isEmpty ? 0 : (768 / 16) * (768 / 16)   // 2304 worst-case ref tokens
         return out + ref
     }
 
