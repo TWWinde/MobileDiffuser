@@ -179,6 +179,7 @@ struct Chip: View {
     var body: some View {
         Text(text)
             .font(.caption2.weight(.medium))
+            .lineLimit(1).fixedSize()   // a chip is a tag — keep it one line at its intrinsic width
             .padding(.horizontal, 8).padding(.vertical, 3)
             .background(filled ? Theme.accentSoft : Theme.surface2, in: Capsule())
             .foregroundStyle(filled ? Theme.accent : Theme.textSecondary)
@@ -223,7 +224,9 @@ private struct DotLabelStyle: LabelStyle {
     func makeBody(configuration: Configuration) -> some View {
         HStack(spacing: 5) {
             configuration.icon.font(.system(size: 7))
-            configuration.title
+            // Keep the badge to one line at its intrinsic width so it never wraps or steals width from a
+            // sibling title in a tight row (the model name beside it shrinks instead).
+            configuration.title.lineLimit(1).fixedSize()
         }
     }
 }

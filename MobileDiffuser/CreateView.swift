@@ -42,7 +42,7 @@ struct CreateView: View {
                     Image(systemName: "cube.box.fill").foregroundStyle(Theme.accent)
                     Text(model.selected.displayName)
                         .font(.subheadline.weight(.semibold)).foregroundStyle(Theme.textPrimary)
-                        .lineLimit(1)
+                        .lineLimit(1).minimumScaleFactor(0.7).layoutPriority(1)
                     FitBadge(capabilities: model.capabilities(for: model.selected))
                     Spacer(minLength: Theme.Space.sm)
                     Image(systemName: "chevron.right").font(.caption2).foregroundStyle(Theme.textTertiary)
@@ -50,7 +50,7 @@ struct CreateView: View {
                 HStack(spacing: Theme.Space.sm) {
                     Text(model.statusText).font(.caption2)
                         .foregroundStyle(model.isFailed ? Theme.danger : Theme.textSecondary)
-                        .lineLimit(1)
+                        .lineLimit(1).minimumScaleFactor(0.8)
                     Spacer(minLength: Theme.Space.sm)
                     if let memory = model.memoryReadout {
                         Text(memory).font(.caption2).monospacedDigit()

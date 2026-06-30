@@ -151,8 +151,7 @@ private struct GenerationDetail: View {
         }
         // Confirmation banner after Save to Photos / Export — shared with Create via `toastBanner`.
         .toastBanner(model.toast)
-        .confirmationDialog("Delete this generation?",
-                            isPresented: $confirmDelete, titleVisibility: .visible) {
+        .alert("Delete this generation?", isPresented: $confirmDelete) {
             Button("Delete", role: .destructive) {
                 model.deleteGeneration(gen)
                 dismiss()

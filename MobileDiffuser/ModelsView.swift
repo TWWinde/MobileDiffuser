@@ -67,6 +67,7 @@ struct ModelCard: View {
         VStack(alignment: .leading, spacing: Theme.Space.sm) {
             HStack {
                 Text(m.displayName).font(.headline).foregroundStyle(Theme.textPrimary)
+                    .lineLimit(1).minimumScaleFactor(0.7).layoutPriority(1)
                 Spacer()
                 FitBadge(capabilities: model.capabilities(for: m))
             }
@@ -106,6 +107,7 @@ struct ModelCard: View {
             let recipeText = recipe.axes.map { $0.selectedOption?.label ?? "" }.joined(separator: " · ")
             Text(recipe.axes.isEmpty ? status : "\(recipeText) · \(status)")
                 .font(.caption2).foregroundStyle(color)
+                .lineLimit(2).minimumScaleFactor(0.85)
         }
     }
 }
@@ -243,7 +245,7 @@ private struct ModelDetail: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(axis.title).font(.subheadline).foregroundStyle(Theme.textPrimary)
                 if let note = axis.selectedOption?.note, !note.isEmpty {
-                    Text(note).font(.caption2).foregroundStyle(Theme.textTertiary)
+                    Text(note).font(.caption2).foregroundStyle(Theme.textTertiary).lineLimit(2)
                 }
             }
             Spacer(minLength: Theme.Space.md)
@@ -283,8 +285,11 @@ private struct ModelDetail: View {
     @ViewBuilder private func componentRow(_ c: RecipeComponent, showActive: Bool) -> some View {
         HStack(spacing: Theme.Space.md) {
             VStack(alignment: .leading, spacing: 3) {
+                // Title on its own full-width line (no longer competing with the badges, which forced it
+                // to wrap mid-word — "Klein 4B · 4-\nbit"); badges sit on the line below.
+                Text(c.title).font(.subheadline.weight(.medium)).foregroundStyle(Theme.textPrimary)
+                    .lineLimit(1).minimumScaleFactor(0.6)
                 HStack(spacing: 6) {
-                    Text(c.title).font(.subheadline.weight(.medium)).foregroundStyle(Theme.textPrimary)
                     Text(c.kind.rawValue).font(.caption2)
                         .padding(.horizontal, 7).padding(.vertical, 2)
                         .background(badgeColor(c.kind).opacity(0.18), in: Capsule())
@@ -311,6 +316,7 @@ private struct ModelDetail: View {
             Spacer(minLength: Theme.Space.sm)
             Text(ByteCountFormatter.string(fromByteCount: c.bytes, countStyle: .file))
                 .font(.caption).foregroundStyle(Theme.textSecondary)
+                .lineLimit(1).fixedSize()   // "2.18 GB" never wraps — keep it from squeezing the title
             componentControl(c).frame(width: 84, alignment: .trailing)
         }
         .frame(minHeight: 52)
