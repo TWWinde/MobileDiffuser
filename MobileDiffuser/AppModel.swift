@@ -229,6 +229,7 @@ final class AppModel {
         if let e = error as? EngineError {
             switch e {
             case .unsupportedOnDevice:  return "This size needs more memory than this device has. Try a smaller size."
+            case .insufficientMemory:   return "Not enough free memory right now. Close some apps or pick a smaller size, then tap Generate."
             case .pausedForHeat:        return "Paused to let your phone cool down. Tap Generate to resume once it's cooler."
             case .decodeFailed:         return "Couldn't finish decoding the image. Tap Generate to try again."
             case .notLoaded:            return "The model isn't loaded yet."
