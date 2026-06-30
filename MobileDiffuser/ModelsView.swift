@@ -119,12 +119,18 @@ struct ModelAction: View {
     var body: some View {
         let recipe = model.recipe(for: m)
         if model.selectedID == m.id, case .downloading(let f) = model.phase {
-            HStack(spacing: Theme.Space.xs) {
-                ProgressView(value: f).frame(width: 90).tint(Theme.accent)
-                Text("\(Int(f * 100))%").font(.caption2).monospacedDigit().foregroundStyle(Theme.textSecondary)
+            VStack(alignment: .trailing, spacing: 2) {
+                HStack(spacing: Theme.Space.xs) {
+                    ProgressView(value: f).frame(width: 90).tint(Theme.accent)
+                    Text("\(Int(f * 100))%").font(.caption2).monospacedDigit().foregroundStyle(Theme.textSecondary)
+                }
+                if let detail = model.downloadMeter.detail {
+                    Text(detail).font(.caption2.monospacedDigit()).foregroundStyle(Theme.textTertiary)
+                        .lineLimit(1).truncationMode(.tail)
+                }
             }
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel("Downloading").accessibilityValue("\(Int(f * 100)) percent")
+            .accessibilityLabel("Downloading").accessibilityValue(model.downloadMeter.detail ?? "\(Int(f * 100)) percent")
         } else if recipe.isInstalled {
             Button { model.selectedID = m.id; dismiss() } label: {
                 Label("Use", systemImage: "wand.and.stars")
@@ -210,8 +216,9 @@ private struct ModelDetail: View {
     @ViewBuilder private func modelProgress(_ f: Double) -> some View {
         VStack(spacing: Theme.Space.xs) {
             ProgressView(value: f).tint(Theme.accent)
-            Text("Downloading… \(Int(f * 100))%")
-                .font(.caption).monospacedDigit().foregroundStyle(Theme.textSecondary)
+            // Live bytes / speed / ETA when the meter has it, else the plain percentage.
+            Text(model.downloadMeter.detail ?? "Downloading… \(Int(f * 100))%")
+                .font(.caption).monospacedDigit().foregroundStyle(Theme.textSecondary).lineLimit(1)
         }.frame(maxWidth: .infinity)
     }
 
@@ -292,6 +299,12 @@ private struct ModelDetail: View {
                 }
                 Text(c.repo).font(.caption2.monospaced()).foregroundStyle(Theme.textTertiary)
                     .lineLimit(1).truncationMode(.middle)
+                // While THIS component is downloading, show its live bytes / speed / ETA (the shared meter
+                // tracks the one active download). componentProgress is non-nil only for the active id.
+                if model.componentProgress(c.id, model: item) != nil, let detail = model.downloadMeter.detail {
+                    Text(detail).font(.caption2.monospacedDigit().weight(.medium)).foregroundStyle(Theme.accent)
+                        .lineLimit(1).truncationMode(.tail)
+                }
             }
             Spacer(minLength: Theme.Space.sm)
             Text(ByteCountFormatter.string(fromByteCount: c.bytes, countStyle: .file))
