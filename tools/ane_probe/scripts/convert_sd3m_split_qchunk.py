@@ -94,9 +94,21 @@ class SD3InputStage(nn.Module):
         return self.pos_embed(latent_image_embeddings), self.context_embedder(token_level_text_embeddings)
 
 
-class SD3BlockStage(nn.Module):
-    def __init__(self, transformer, start: int, end: int, latent: int):
+class SD3Conditioning(nn.Module):
+    """pooled text + timestep -> modulation_inputs (resolution independent)."""
+
+    def __init__(self, transformer):
         super().__init__()
+        self.time_text_embed = transformer.time_text_embed
+
+    def forward(self, pooled_text_embeddings, timestep):
+        return (self.time_text_embed(timestep, pooled_text_embeddings.reshape(pooled_text_embeddings.shape[0], -1)),)
+
+
+class SD3BlockStage(nn.Module):
+    def __init__(self, transformer, start: int, end: int, latent: int, final_bias_input: bool = False):
+        super().__init__()
+        self.final_bias_input = final_bias_input
         self.blocks = nn.ModuleList([transformer.transformer_blocks[i] for i in range(start, end)])
         final = end == transformer.config.num_layers
         self.norm_out = transformer.norm_out if final else None
@@ -105,7 +117,8 @@ class SD3BlockStage(nn.Module):
         self.out_channels = transformer.out_channels
         self.latent = latent
 
-    def forward(self, latent_image_embeddings, token_level_text_embeddings, modulation_inputs):
+    def forward(self, latent_image_embeddings, token_level_text_embeddings, modulation_inputs,
+                reseed_image_bias=None):
         for block in self.blocks:
             txt, img = block(
                 hidden_states=latent_image_embeddings,
@@ -117,6 +130,10 @@ class SD3BlockStage(nn.Module):
                 token_level_text_embeddings = txt
         if self.norm_out is None:
             return latent_image_embeddings, token_level_text_embeddings
+        if reseed_image_bias is not None:
+            # ReSeed: per-channel bias on the last block's image output (first sampler step only;
+            # the runtime passes zeros for later steps)
+            latent_image_embeddings = latent_image_embeddings + reseed_image_bias[:, None, :]
         x = self.proj_out(self.norm_out(latent_image_embeddings, modulation_inputs))
         g = self.latent // self.patch
         x = x.reshape(x.shape[0], g, g, self.patch, self.patch, self.out_channels)
@@ -162,6 +179,10 @@ def main() -> int:
     ap.add_argument("--q-chunks", type=int, default=16)
     ap.add_argument("--only-stages", default="", help="comma list of stage indices to (re)convert, e.g. 0,1,6")
     ap.add_argument("--int8", action="store_true")
+    ap.add_argument("--with-conditioning", action="store_true",
+                    help="also convert MultiModalDiffusionTransformerConditioning (needed for a new checkpoint)")
+    ap.add_argument("--final-bias-input", action="store_true",
+                    help="final stage takes reseed_image_bias [1,1536] added to the last block's image output")
     ap.add_argument("-o", "--output-dir", type=Path, required=True)
     ap.add_argument("--compile-into", type=Path, help="xcrun coremlcompiler each package into this folder")
     args = ap.parse_args()
@@ -186,8 +207,10 @@ def main() -> int:
         torch.manual_seed(0)
     else:
         assert args.ckpt_path and args.ckpt_path.exists(), "--ckpt-path required"
-        state = load_file(str(args.ckpt_path), device="cpu")
-        state = {k: v.float() for k, v in state.items()}
+        files = sorted(args.ckpt_path.glob("*.safetensors")) if args.ckpt_path.is_dir() else [args.ckpt_path]
+        state = {}
+        for f in files:  # single file or a sharded diffusers folder
+            state.update({k: v.float() for k, v in load_file(str(f), device="cpu").items()})
         transformer.load_state_dict(state, strict=True)
         del state; gc.collect()
     for blk in transformer.transformer_blocks:
@@ -201,20 +224,29 @@ def main() -> int:
               "modulation_inputs": torch.randn(1, 1536)},
              ["latent_image_embeddings_out", "token_level_text_embeddings_out"])]
     for i, (a, b) in enumerate(ranges, start=1):
-        outs = ["noise_pred"] if b == 24 else ["latent_image_embeddings_out", "token_level_text_embeddings_out"]
-        jobs.append((i, SD3BlockStage(transformer, a, b, args.latent),
-                     {"latent_image_embeddings": torch.randn(1, tokens, 1536),
-                      "token_level_text_embeddings": torch.randn(1, TXT_TOKENS, 1536),
-                      "modulation_inputs": torch.randn(1, 1536)}, outs))
+        final = b == 24
+        outs = ["noise_pred"] if final else ["latent_image_embeddings_out", "token_level_text_embeddings_out"]
+        ins = {"latent_image_embeddings": torch.randn(1, tokens, 1536),
+               "token_level_text_embeddings": torch.randn(1, TXT_TOKENS, 1536),
+               "modulation_inputs": torch.randn(1, 1536)}
+        if final and args.final_bias_input:
+            ins["reseed_image_bias"] = torch.zeros(1, 1536)
+        jobs.append((i, SD3BlockStage(transformer, a, b, args.latent, final and args.final_bias_input), ins, outs))
+    if args.with_conditioning:
+        jobs.append(("Conditioning", SD3Conditioning(transformer),
+                     {"pooled_text_embeddings": torch.randn(1, 2048, 1, 1), "timestep": torch.tensor([500.0])},
+                     ["modulation_inputs"]))
 
     for idx, module, inputs, outs in jobs:
         if only and idx not in only:
             continue
-        pkg = args.output_dir / f"MultiModalDiffusionTransformerStage{idx}.mlpackage"
+        stem = "MultiModalDiffusionTransformerConditioning" if idx == "Conditioning" \
+            else f"MultiModalDiffusionTransformerStage{idx}"
+        pkg = args.output_dir / f"{stem}.mlpackage"
         convert(module, inputs, outs, pkg, args.int8)
         if args.compile_into:
             args.compile_into.mkdir(parents=True, exist_ok=True)
-            dst = args.compile_into / f"MultiModalDiffusionTransformerStage{idx}.mlmodelc"
+            dst = args.compile_into / f"{stem}.mlmodelc"
             if dst.exists():
                 shutil.rmtree(dst)
             subprocess.run(["xcrun", "coremlcompiler", "compile", str(pkg), str(args.compile_into)],

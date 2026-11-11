@@ -2,6 +2,8 @@ import Foundation
 
 enum DiffusionModelKind: String, CaseIterable, Hashable, Identifiable {
     case sd3MediumTwoStep
+    /// ReSeed paper student (4-step DMD). One set of weights serves both modes: ReSeed alpha 0
+    /// is the plain student; alpha > 0 adds the first-interval residual biases (ReSeedBiases.json).
     case sd3MediumFourStep
 
     var id: String { rawValue }
@@ -62,6 +64,11 @@ enum DiffusionModelKind: String, CaseIterable, Hashable, Identifiable {
             return resolution.sd3MediumFourStepResourceFolderName
         }
     }
+
+    /// Selectable ReSeed bias scales (alpha); 0 disables the adapter. Empty = no ReSeed support.
+    var reseedScales: [Float] {
+        self == .sd3MediumFourStep ? [0, 0.5, 1.0, 1.5] : []
+    }
 }
 
 enum SD3Resolution: Int, CaseIterable, Hashable, Identifiable {
@@ -90,7 +97,9 @@ enum SD3Resolution: Int, CaseIterable, Hashable, Identifiable {
         "coremlsd3_2step\(folderSuffix)"
     }
 
+    /// 4-step = ReSeed student, one MMDiT block per stage at every resolution (required for the
+    /// between-stage ReSeed biases), shared by ReSeed off and on.
     var sd3MediumFourStepResourceFolderName: String {
-        "coremlsd3_4step\(folderSuffix)"
+        "coremlsd3_reseed\(folderSuffix)"
     }
 }

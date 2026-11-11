@@ -34,6 +34,8 @@ public struct PipelineConfiguration: Hashable {
     public var stepCount: Int = 50
     /// Random seed which to start generation
     public var seed: UInt32 = 0
+    /// ReSeed bias scale for the first sampler interval (0 = off, 1 = paper default)
+    public var reseedScale: Float = 0
     /// Controls the influence of the text prompt on sampling process (0=random images)
     public var guidanceScale: Float = 7.5
     /// List of Images for available ControlNet Models

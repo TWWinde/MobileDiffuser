@@ -209,7 +209,9 @@ public struct StableDiffusion3Pipeline: StableDiffusionPipelineProtocol {
                 timeStep: t,
                 tokenLevelTextEmbeddings: mmditHiddenStates,
                 pooledTextEmbeddings: mmditPooledStates,
-                precomputedConditioning: conditioningCache?[step]
+                precomputedConditioning: conditioningCache?[step],
+                // ReSeed acts on the first sampler interval only
+                reseedScale: step == 0 ? config.reseedScale : 0
             )
 
             if useGuidance {

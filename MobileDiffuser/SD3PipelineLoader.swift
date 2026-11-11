@@ -176,7 +176,7 @@ enum SD3PipelineLoader {
             tokenizer: tokenizer2, modelAt: urls.textEncoder2URL, configuration: textEncoder2Config
         )
 
-        let mmdit: MultiModalDiffusionTransformer
+        var mmdit: MultiModalDiffusionTransformer
         if hasSplitMMDiT {
             if urls.mmditAdaptiveLayerNormStageURLs.count == urls.mmditStageURLs.count {
                 mmdit = MultiModalDiffusionTransformer(
@@ -206,6 +206,12 @@ enum SD3PipelineLoader {
             }
         } else {
             mmdit = MultiModalDiffusionTransformer(modelAt: urls.mmditURL, configuration: mmditConfig)
+        }
+        // Optional ReSeed first-interval biases shipped with the resource folder
+        let reseedURL = resourceURL.appending(path: ReSeedBiases.resourceName)
+        if FileManager.default.fileExists(atPath: reseedURL.path) {
+            mmdit.reseedBiases = try ReSeedBiases(contentsOf: reseedURL)
+            print("[SD3] ReSeed biases loaded (\(mmdit.reseedBiases?.image.count ?? 0) blocks)")
         }
         let decoder = Decoder(modelAt: urls.decoderURL, configuration: decoderConfig)
 

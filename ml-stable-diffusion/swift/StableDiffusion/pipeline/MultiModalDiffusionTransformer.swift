@@ -142,6 +142,9 @@ public struct MultiModalDiffusionTransformer: ResourceManaging {
     var models: [ManagedMLModel]
     var backend: Backend
 
+    /// Optional ReSeed first-interval biases (requires one transformer block per split stage).
+    public var reseedBiases: ReSeedBiases?
+
     /// Creates a MMDiT noise prediction model
     ///
     /// - Parameters:
@@ -415,7 +418,8 @@ public struct MultiModalDiffusionTransformer: ResourceManaging {
         timeStep: Float,
         tokenLevelTextEmbeddings: MLShapedArray<Float32>,
         pooledTextEmbeddings: MLShapedArray<Float32>,
-        precomputedConditioning: PrecomputedConditioning? = nil
+        precomputedConditioning: PrecomputedConditioning? = nil,
+        reseedScale: Float = 0
     ) throws -> [MLShapedArray<Float32>] {
         if case .chunked = backend {
             return try predictNoiseWithSplitBody(
@@ -423,7 +427,8 @@ public struct MultiModalDiffusionTransformer: ResourceManaging {
                 timeStep: timeStep,
                 tokenLevelTextEmbeddings: tokenLevelTextEmbeddings,
                 pooledTextEmbeddings: pooledTextEmbeddings,
-                precomputedConditioning: precomputedConditioning
+                precomputedConditioning: precomputedConditioning,
+                reseedScale: reseedScale
             )
         }
 
@@ -477,10 +482,28 @@ public struct MultiModalDiffusionTransformer: ResourceManaging {
         timeStep: Float,
         tokenLevelTextEmbeddings: MLShapedArray<Float32>,
         pooledTextEmbeddings: MLShapedArray<Float32>,
-        precomputedConditioning: PrecomputedConditioning?
+        precomputedConditioning: PrecomputedConditioning?,
+        reseedScale: Float = 0
     ) throws -> [MLShapedArray<Float32>] {
         guard case .chunked(_, _, let adaptiveLayerNormStages, let stages) = backend else {
             return []
+        }
+
+        // ReSeed: stage k (k >= 1) holds transformer block k-1, so every block output is a stage
+        // output. Only valid for a one-block-per-stage split.
+        let reseed: ReSeedBiases? = {
+            guard reseedScale != 0, let biases = reseedBiases else { return nil }
+            guard stages.count == biases.image.count + 1 else {
+                print("[SD3] ReSeed disabled: needs one block per stage (stages=\(stages.count), blocks=\(biases.image.count))")
+                return nil
+            }
+            return biases
+        }()
+        let finalBias = try MLMultiArray(shape: [1, 1536], dataType: .float32)
+        do {
+            let p = finalBias.dataPointer.assumingMemoryBound(to: Float.self)
+            let last = reseed?.image.last
+            for c in 0..<1536 { p[c] = (last.map { reseedScale * $0[c] }) ?? 0 }
         }
 
         let batchSize = latents.first?.shape.first ?? 2
@@ -504,6 +527,8 @@ public struct MultiModalDiffusionTransformer: ResourceManaging {
             }
             features["latent_image_embeddings"] = MLMultiArray(latent)
             features["token_level_text_embeddings"] = MLMultiArray(tokenLevelTextEmbeddings)
+            // Final stage of a ReSeed-converted split takes the last block's image bias as input.
+            features["reseed_image_bias"] = finalBias
 
             var result: MLFeatureProvider?
             for (stageIndex, stage) in stages.enumerated() {
@@ -538,6 +563,17 @@ public struct MultiModalDiffusionTransformer: ResourceManaging {
 
                 guard let result else {
                     throw PipelineError.missingMMDiTOutputs
+                }
+
+                if let reseed, stageIndex >= 1, stageIndex < stages.count - 1 {
+                    let block = stageIndex - 1
+                    if let img = result.featureValue(for: "latent_image_embeddings_out")?.multiArrayValue {
+                        ReSeedBiases.add(reseed.image[block], scale: reseedScale, to: img)
+                    }
+                    if let ctxBias = reseed.context[block],
+                       let txt = result.featureValue(for: "token_level_text_embeddings_out")?.multiArrayValue {
+                        ReSeedBiases.add(ctxBias, scale: reseedScale, to: txt)
+                    }
                 }
 
                 for name in result.featureNames.sorted() {

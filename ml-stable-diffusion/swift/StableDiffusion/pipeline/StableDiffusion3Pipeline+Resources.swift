@@ -110,7 +110,7 @@ public extension StableDiffusion3Pipeline {
 
         // Denoiser model. Prefer the split MMDiT layout when present; fall
         // back to the original monolithic model for compatibility.
-        let mmdit: MultiModalDiffusionTransformer
+        var mmdit: MultiModalDiffusionTransformer
         if FileManager.default.fileExists(atPath: urls.mmditConditioningURL.path),
            !urls.mmditStageURLs.isEmpty
         {
@@ -139,6 +139,12 @@ public extension StableDiffusion3Pipeline {
             mmdit = MultiModalDiffusionTransformer(modelAt: urls.mmditURL, configuration: config)
         }
 
+        // Optional ReSeed first-interval biases shipped with the resource folder
+        let reseedURL = baseURL.appending(path: ReSeedBiases.resourceName)
+        if FileManager.default.fileExists(atPath: reseedURL.path) {
+            mmdit.reseedBiases = try ReSeedBiases(contentsOf: reseedURL)
+            print("[SD3] ReSeed biases loaded (\(mmdit.reseedBiases?.image.count ?? 0) blocks)")
+        }
         // Image Decoder
         let decoder = Decoder(modelAt: urls.decoderURL, configuration: config)
 

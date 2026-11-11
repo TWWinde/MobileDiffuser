@@ -16,7 +16,7 @@ while i + 1 < argv.count, argv[i].hasPrefix("--") {
     i += 2
 }
 guard let resources = opts["resources"], let out = opts["out"] else {
-    print("usage: sd3-ane-cli --resources DIR --out FILE.png [--prompt P] [--steps 4] [--seed 42] [--size 1024] [--units ane|gpu|cpu]")
+    print("usage: sd3-ane-cli --resources DIR --out FILE.png [--prompt P] [--steps 4] [--seed 42] [--size 1024] [--units ane|gpu|cpu] [--reseed 1.0]")
     exit(2)
 }
 let size = Float32(opts["size"] ?? "1024")!
@@ -46,6 +46,7 @@ config.decoderShiftFactor = 0.0609
 config.originalSize = size
 config.targetSize = size
 config.disableSafety = true
+config.reseedScale = Float(opts["reseed"] ?? "0")!
 
 let images = try pipeline.generateImages(configuration: config) { progress in
     print("step \(progress.step + 1)/\(progress.stepCount)")

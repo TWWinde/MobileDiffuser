@@ -64,10 +64,14 @@ coremlsd3_2step/TextEncoder2.mlmodelc
 coremlsd3_2step/VAEDecoder.mlmodelc
 coremlsd3_2step/MultiModalDiffusionTransformerStage0.mlmodelc
 
-coremlsd3_4step/TextEncoder.mlmodelc
-coremlsd3_4step/TextEncoder2.mlmodelc
-coremlsd3_4step/VAEDecoder.mlmodelc
-coremlsd3_4step/MultiModalDiffusionTransformerStage0.mlmodelc
+coremlsd3_reseed/TextEncoder.mlmodelc
+coremlsd3_reseed/TextEncoder2.mlmodelc
+coremlsd3_reseed/VAEDecoder.mlmodelc
+coremlsd3_reseed/MultiModalDiffusionTransformerConditioning.mlmodelc
+coremlsd3_reseed/MultiModalDiffusionTransformerStage0.mlmodelc ... Stage24.mlmodelc
+coremlsd3_reseed/ReSeedBiases.json
+
+coremlsd3_reseed_1024/  (same layout, 1024 x 1024)
 ```
 
 The same Hugging Face repository also contains the source checkpoints under
@@ -76,9 +80,15 @@ The same Hugging Face repository also contains the source checkpoints under
 ## Current Status
 
 - Model family: Stable Diffusion 3 Medium distilled checkpoints.
-- App choices: `2 steps` and `4 steps`, `512` and `1024`.
+- App choices: `2 steps` and `4 steps`, `512` and `1024`, and for 4 steps a
+  ReSeed strength `off / 0.5 / 1.0 / 1.5`.
 - Output size: 512 x 512, and 1024 x 1024 for the 4-step model (see
   [docs/ANE_1024.md](docs/ANE_1024.md)).
+- 4-step model: the [ReSeed](https://twwinde.github.io/reseed-project-page/)
+  SD3 Medium 4-step DMD student. One set of weights serves both modes: ReSeed
+  off is the plain student; ReSeed on adds the paper's first-interval residual
+  biases (72,192 parameters) for more diverse seeds, at no measurable cost
+  (see [docs/RESEED.md](docs/RESEED.md)).
 - Runtime path: CLIP-L + CLIP-G text encoders, split MMDiT, VAE decoder.
 - Guidance: CFG disabled in practice, `guidanceScale = 1.0`.
 - Scheduler shift: `shift = 3.0`.
@@ -86,8 +96,8 @@ The same Hugging Face repository also contains the source checkpoints under
 - Quantization: INT8 linear symmetric weight quantization for split MMDiT.
 - Resource folders expected by the app:
   - `coremlsd3_2step/`
-  - `coremlsd3_4step/`
-  - `coremlsd3_4step_1024/`
+  - `coremlsd3_reseed/` (4 steps, 512)
+  - `coremlsd3_reseed_1024/` (4 steps, 1024)
 
 The resource folders are intentionally ignored by Git because each one is
 roughly 2.7 GB.
@@ -100,6 +110,7 @@ Observed 512 x 512 generation times on iPhone 15 Pro with ANE-first execution:
 | --- | ---: | ---: | ---: |
 | SD3 Medium 2-step | 2 | ~5.6 s | ~86 MB |
 | SD3 Medium 4-step | 4 | ~9.5 s | ~87 MB |
+| SD3 Medium 4-step (ReSeed student, one block per stage, ReSeed on) | 4 | ~9.4 s | ~58 MB |
 
 Observed 1024 x 1024 on iPhone 15 Pro (iOS 18.5), ANE-first, warm run:
 
@@ -289,7 +300,11 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for details.
 ## App Controls
 
 - `2 steps`: uses `coremlsd3_2step` and `stepCount = 2`.
-- `4 steps`: uses `coremlsd3_4step` and `stepCount = 4`.
+- `4 steps`: uses `coremlsd3_reseed` (`coremlsd3_reseed_1024` at 1024) and
+  `stepCount = 4`.
+- ReSeed strength (4 steps only): `off` runs the plain student; `0.5 / 1.0 / 1.5`
+  add the first-interval ReSeed biases scaled by alpha. Same weights, no reload.
+- `512 / 1024`: output resolution.
 - Prompt field: text prompt sent to CLIP encoders.
 - Generate: runs the selected model.
 - Share: exports the current generated image.

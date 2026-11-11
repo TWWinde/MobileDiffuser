@@ -16,6 +16,9 @@ class DiffusionViewModel: ObservableObject {
     @Published private(set) var selectedModel: DiffusionModelKind = .sd3MediumTwoStep
 
     @Published private(set) var resolution: SD3Resolution = .default
+    /// ReSeed alpha for the 4-step model (0 = off, 1 = paper default). Same weights either way,
+    /// so changing it never reloads the pipeline.
+    @Published var reseedScale: Float = 0
 
     /// Compute-units fallback chain. Keep this ANE-only while validating MMDiT
     /// acceleration: CPU/GPU fallback can hide an ANE load failure and make
@@ -252,6 +255,7 @@ class DiffusionViewModel: ObservableObject {
         config.stepCount = selectedModel.stepCount
         config.guidanceScale = selectedModel.guidanceScale
         config.schedulerTimestepShift = selectedModel.timestepShift
+        config.reseedScale = selectedModel.reseedScales.isEmpty ? 0 : reseedScale
         config.seed = UInt32.random(in: UInt32.min...UInt32.max)
         print("[SD3] seed: \(config.seed)")
         config.encoderScaleFactor = 1.5305
@@ -375,6 +379,16 @@ struct ContentView: View {
                     }
                     .pickerStyle(.segmented)
                     .frame(width: 120)
+                    .disabled(viewModel.isGenerating)
+                }
+
+                if !viewModel.selectedModel.reseedScales.isEmpty {
+                    Picker("ReSeed strength", selection: $viewModel.reseedScale) {
+                        ForEach(viewModel.selectedModel.reseedScales, id: \.self) { scale in
+                            Text(scale == 0 ? "ReSeed off" : String(format: "α %.1f", scale)).tag(scale)
+                        }
+                    }
+                    .pickerStyle(.segmented)
                     .disabled(viewModel.isGenerating)
                 }
 
