@@ -15,7 +15,7 @@ class DiffusionViewModel: ObservableObject {
     @Published var memoryFootprintMB: Double = 0
     @Published private(set) var selectedModel: DiffusionModelKind = .sd3MediumTwoStep
 
-    private let resolution: SD3Resolution = .default
+    @Published private(set) var resolution: SD3Resolution = .default
 
     /// Compute-units fallback chain. Keep this ANE-only while validating MMDiT
     /// acceleration: CPU/GPU fallback can hide an ANE load failure and make
@@ -37,7 +37,16 @@ class DiffusionViewModel: ObservableObject {
         let memoryFootprintMB: Double
     }
 
-    private var generatedImagesByModel: [DiffusionModelKind: GeneratedImageSnapshot] = [:]
+    private struct SnapshotKey: Hashable {
+        let model: DiffusionModelKind
+        let resolution: SD3Resolution
+    }
+
+    private var generatedImagesByModel: [SnapshotKey: GeneratedImageSnapshot] = [:]
+
+    private var snapshotKey: SnapshotKey {
+        SnapshotKey(model: selectedModel, resolution: resolution)
+    }
 
     private func logElapsed(_ label: String, since start: CFAbsoluteTime) {
         let elapsed = CFAbsoluteTimeGetCurrent() - start
@@ -58,7 +67,18 @@ class DiffusionViewModel: ObservableObject {
         cacheCurrentGeneratedImage()
         unloadPipeline(reason: "model-switch")
         selectedModel = model
-        restoreGeneratedImage(for: model)
+        restoreGeneratedImage()
+        validateSD3Resources()
+    }
+
+    func selectResolution(_ newResolution: SD3Resolution) {
+        guard newResolution != resolution else { return }
+        guard !isGenerating else { return }
+
+        cacheCurrentGeneratedImage()
+        unloadPipeline(reason: "resolution-switch")
+        resolution = newResolution
+        restoreGeneratedImage()
         validateSD3Resources()
     }
 
@@ -101,15 +121,15 @@ class DiffusionViewModel: ObservableObject {
 
     private func cacheCurrentGeneratedImage() {
         guard let generatedImage else { return }
-        generatedImagesByModel[selectedModel] = GeneratedImageSnapshot(
+        generatedImagesByModel[snapshotKey] = GeneratedImageSnapshot(
             image: generatedImage,
             generationTime: generationTime,
             memoryFootprintMB: memoryFootprintMB
         )
     }
 
-    private func restoreGeneratedImage(for model: DiffusionModelKind) {
-        if let snapshot = generatedImagesByModel[model] {
+    private func restoreGeneratedImage() {
+        if let snapshot = generatedImagesByModel[snapshotKey] {
             generatedImage = snapshot.image
             generationTime = snapshot.generationTime
             elapsedGenerationTime = snapshot.generationTime
@@ -267,7 +287,7 @@ class DiffusionViewModel: ObservableObject {
             if let cgImage {
                 let image = UIImage(cgImage: cgImage)
                 generatedImage = image
-                generatedImagesByModel[selectedModel] = GeneratedImageSnapshot(
+                generatedImagesByModel[snapshotKey] = GeneratedImageSnapshot(
                     image: image,
                     generationTime: finalTime,
                     memoryFootprintMB: memoryFootprintMB
@@ -342,13 +362,20 @@ struct ContentView: View {
                     .pickerStyle(.segmented)
                     .disabled(viewModel.isGenerating)
 
-                    Text(viewModel.activeResolutionLabel)
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundColor(.green)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 7)
-                        .background(Color(UIColor.secondarySystemBackground))
-                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    Picker(
+                        "Resolution",
+                        selection: Binding(
+                            get: { viewModel.resolution },
+                            set: { viewModel.selectResolution($0) }
+                        )
+                    ) {
+                        ForEach(SD3Resolution.allCases) { resolution in
+                            Text(resolution.shortLabel).tag(resolution)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(width: 120)
+                    .disabled(viewModel.isGenerating)
                 }
 
                 ZStack(alignment: .topLeading) {
@@ -531,6 +558,7 @@ struct ContentView: View {
             ModelSettingsView(
                 resourceManager: resourceManager,
                 selectedModel: viewModel.selectedModel,
+                resolution: viewModel.resolution,
                 onResourcesChanged: {
                     viewModel.unloadPipeline(reason: "resources-updated")
                     viewModel.validateResources()
@@ -543,6 +571,7 @@ struct ContentView: View {
 struct ModelSettingsView: View {
     @ObservedObject var resourceManager: ModelResourceManager
     let selectedModel: DiffusionModelKind
+    let resolution: SD3Resolution
     let onResourcesChanged: () -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -570,14 +599,14 @@ struct ModelSettingsView: View {
                 }
 
                 VStack(alignment: .leading, spacing: 12) {
-                    ResourceStatusRow(
-                        title: "2 steps",
-                        isReady: resourceManager.hasResources(for: .sd3MediumTwoStep)
-                    )
-                    ResourceStatusRow(
-                        title: "4 steps",
-                        isReady: resourceManager.hasResources(for: .sd3MediumFourStep)
-                    )
+                    ForEach(SD3Resolution.allCases) { res in
+                        ForEach(DiffusionModelKind.allCases) { model in
+                            ResourceStatusRow(
+                                title: "\(model.selectorLabel) · \(res.label)",
+                                isReady: resourceManager.hasResources(for: model, resolution: res)
+                            )
+                        }
+                    }
                 }
 
                 if resourceManager.isDownloading {
@@ -599,11 +628,11 @@ struct ModelSettingsView: View {
                 VStack(spacing: 10) {
                     Button {
                         Task {
-                            await resourceManager.downloadSelected(selectedModel)
+                            await resourceManager.downloadSelected(selectedModel, resolution: resolution)
                             onResourcesChanged()
                         }
                     } label: {
-                        Label("Download Selected Model", systemImage: "arrow.down.circle")
+                        Label("Download \(selectedModel.selectorLabel) · \(resolution.label)", systemImage: "arrow.down.circle")
                             .frame(maxWidth: .infinity, minHeight: 46)
                     }
                     .buttonStyle(.borderedProminent)

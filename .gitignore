@@ -56,3 +56,9 @@ coremlsd35/
 
 # Legacy preview models are too large for source control.
 MobileDiffuser/Preview Content/CoreMLModels/
+
+# Local build / outputs
+build/
+tools/sd3_ane_cli/out/
+tools/ane_probe/Models/
+tools/ane_probe/build/

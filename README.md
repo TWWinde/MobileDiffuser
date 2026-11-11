@@ -76,8 +76,9 @@ The same Hugging Face repository also contains the source checkpoints under
 ## Current Status
 
 - Model family: Stable Diffusion 3 Medium distilled checkpoints.
-- App choices: `2 steps` and `4 steps`.
-- Output size: 512 x 512.
+- App choices: `2 steps` and `4 steps`, `512` and `1024`.
+- Output size: 512 x 512, and 1024 x 1024 for the 4-step model (see
+  [docs/ANE_1024.md](docs/ANE_1024.md)).
 - Runtime path: CLIP-L + CLIP-G text encoders, split MMDiT, VAE decoder.
 - Guidance: CFG disabled in practice, `guidanceScale = 1.0`.
 - Scheduler shift: `shift = 3.0`.
@@ -86,6 +87,7 @@ The same Hugging Face repository also contains the source checkpoints under
 - Resource folders expected by the app:
   - `coremlsd3_2step/`
   - `coremlsd3_4step/`
+  - `coremlsd3_4step_1024/`
 
 The resource folders are intentionally ignored by Git because each one is
 roughly 2.7 GB.
@@ -98,6 +100,15 @@ Observed 512 x 512 generation times on iPhone 15 Pro with ANE-first execution:
 | --- | ---: | ---: | ---: |
 | SD3 Medium 2-step | 2 | ~5.6 s | ~86 MB |
 | SD3 Medium 4-step | 4 | ~9.5 s | ~87 MB |
+
+Observed 1024 x 1024 on iPhone 15 Pro (iOS 18.5), ANE-first, warm run:
+
+| Mode | Steps | Text | MMDiT | VAE (3x3 tiles) | Total | Peak app memory |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| SD3 Medium 4-step 1024 | 4 | 0.7 s | 25.2 s | 5.4 s | ~31 s | ~146 MB |
+
+The first 1024 generation also compiles the 25 MMDiT stages on device (~45 s,
+once; cached afterwards).
 
 These numbers are example measurements from local device testing. First use can
 take longer because the app may need to download model resources and Core ML may

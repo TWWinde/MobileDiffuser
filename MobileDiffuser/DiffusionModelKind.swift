@@ -64,20 +64,33 @@ enum DiffusionModelKind: String, CaseIterable, Hashable, Identifiable {
     }
 }
 
-enum SD3Resolution: Int, Hashable {
+enum SD3Resolution: Int, CaseIterable, Hashable, Identifiable {
     case r512 = 512
+    /// 1024 uses query-chunked attention, one MMDiT block per Core ML stage (24 body stages),
+    /// and a tiled 3x3 decode with the 512 VAE decoder (see Decoder.decodeTiled).
+    case r1024 = 1024
 
     static let `default`: SD3Resolution = .r512
+
+    var id: Int { rawValue }
 
     var label: String {
         "\(rawValue)x\(rawValue)"
     }
 
+    var shortLabel: String {
+        "\(rawValue)"
+    }
+
+    private var folderSuffix: String {
+        self == .r512 ? "" : "_\(rawValue)"
+    }
+
     var sd3MediumTwoStepResourceFolderName: String {
-        "coremlsd3_2step"
+        "coremlsd3_2step\(folderSuffix)"
     }
 
     var sd3MediumFourStepResourceFolderName: String {
-        "coremlsd3_4step"
+        "coremlsd3_4step\(folderSuffix)"
     }
 }
