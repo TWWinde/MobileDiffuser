@@ -81,9 +81,12 @@ The same Hugging Face repository also contains the source checkpoints under
 
 ## Current Status
 
-- Model family: Stable Diffusion 3 Medium distilled checkpoints.
-- App choices: `2 steps` and `4 steps`, `512` and `1024`, and for 4 steps a
-  ReSeed strength `off / 0.5 / 1.0 / 1.5`.
+- Model families: Stable Diffusion 3 Medium distilled checkpoints, and FLUX.2
+  Klein 4B with text encoder, denoiser and VAE all on the ANE (1024 x 1024 in
+  ~77 s warm on iPhone 15 Pro; see [docs/FLUX2_KLEIN.md](docs/FLUX2_KLEIN.md)).
+- App choices: model `SD3M` / `FLUX.2 Klein`, `2 steps` / `4 steps`, `512` /
+  `1024`, and for SD3M 4 steps a ReSeed strength `off / 0.5 / 1.0 / 1.5`.
+  A running generation can be cancelled.
 - Output size: 512 x 512, and 1024 x 1024 for the 4-step model (see
   [docs/ANE_1024.md](docs/ANE_1024.md)).
 - 4-step model: the [ReSeed](https://twwinde.github.io/reseed-project-page/)
@@ -100,6 +103,8 @@ The same Hugging Face repository also contains the source checkpoints under
   - `coremlsd3_2step/`
   - `coremlsd3_reseed/` (4 steps, 512)
   - `coremlsd3_reseed_1024/` (4 steps, 1024)
+  - `coreml_flux2_klein_1024/` (FLUX.2 Klein; also holds the text encoder, VAE
+    and tokenizer shared with `coreml_flux2_klein_512/`)
 
 The resource folders are intentionally ignored by Git because each one is
 roughly 2.7 GB.

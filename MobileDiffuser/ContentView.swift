@@ -27,6 +27,38 @@ class DiffusionViewModel: ObservableObject {
         [.aneFirst]
 
     private var pipeline: (any StableDiffusionPipelineProtocol)?
+    private var kleinPipeline: Flux2KleinPipeline?
+    private let cancelFlag = CancelFlag()
+    @Published private(set) var isCancelling: Bool = false
+
+    /// Ask the running generation to stop. SD3 stops after the current denoising step; FLUX.2 Klein
+    /// stops before the next Core ML stage.
+    func cancelGeneration() {
+        guard isGenerating, !isCancelling else { return }
+        cancelFlag.set(true)
+        isCancelling = true
+        statusMessage = "Cancelling…"
+    }
+
+    fileprivate func finishCancelled() {
+        isGenerating = false
+        isCancelling = false
+        cancelFlag.set(false)
+        stopGenerationTimer()
+        generationTime = 0
+        elapsedGenerationTime = 0
+        statusMessage = "Generation cancelled."
+        errorMessage = nil
+        if pendingMemoryWarningUnload { unloadPipeline(reason: "deferred-memoryWarning") }
+    }
+
+    func selectFamily(_ family: ModelFamily) {
+        selectModel(.kind(family: family, steps: selectedModel.stepCount))
+    }
+
+    func selectSteps(_ steps: Int) {
+        selectModel(.kind(family: selectedModel.family, steps: steps))
+    }
     private var resourceURL: URL?
     private var activeProfile: SD3PipelineLoader.ComputeUnitsProfile?
     private var loadedModel: DiffusionModelKind?
@@ -70,6 +102,9 @@ class DiffusionViewModel: ObservableObject {
         cacheCurrentGeneratedImage()
         unloadPipeline(reason: "model-switch")
         selectedModel = model
+        if !model.supportedResolutions.contains(resolution) {
+            resolution = model.supportedResolutions[0]
+        }
         restoreGeneratedImage()
         validateSD3Resources()
     }
@@ -77,6 +112,7 @@ class DiffusionViewModel: ObservableObject {
     func selectResolution(_ newResolution: SD3Resolution) {
         guard newResolution != resolution else { return }
         guard !isGenerating else { return }
+        guard selectedModel.supportedResolutions.contains(newResolution) else { return }
 
         cacheCurrentGeneratedImage()
         unloadPipeline(reason: "resolution-switch")
@@ -99,9 +135,10 @@ class DiffusionViewModel: ObservableObject {
 
     private func validateSD3Resources() {
         let folderName = selectedModel.resourceFolderName(for: resolution)
-        guard let url = SD3PipelineLoader.resolveResourceURL(
-            folderName: folderName
-        ) else {
+        let resolved = selectedModel.isKlein
+            ? SD3PipelineLoader.resolveKleinResourceURL(folderName: folderName)
+            : SD3PipelineLoader.resolveResourceURL(folderName: folderName)
+        guard let url = resolved else {
             errorMessage = "\(selectedModel.shortName) \(resolution.label) resources not found. Open Settings to download \(folderName)."
             statusMessage = "\(selectedModel.displayName) \(resolution.label) resources not found. Download models in Settings."
             resourceURL = nil
@@ -109,7 +146,7 @@ class DiffusionViewModel: ObservableObject {
             return
         }
 
-        let missing = SD3PipelineLoader.missingResources(at: url)
+        let missing = SD3PipelineLoader.missingResources(at: url, for: selectedModel)
         resourceURL = url
         isResourcesValid = missing.isEmpty
         if missing.isEmpty {
@@ -117,7 +154,8 @@ class DiffusionViewModel: ObservableObject {
             errorMessage = nil
         } else {
             statusMessage = "\(selectedModel.displayName) \(resolution.label) resources incomplete: \(missing.joined(separator: ", "))"
-            errorMessage = "Missing \(selectedModel.selectorLabel) resources: \(missing.joined(separator: ", "))"
+            let shown = missing.prefix(4).joined(separator: ", ") + (missing.count > 4 ? " … (\(missing.count) files)" : "")
+            errorMessage = "Missing \(selectedModel.selectorLabel) resources: \(shown)"
         }
         print("[\(selectedModel.shortName)] \(resolution.label) resources at \(url.path)")
     }
@@ -150,6 +188,13 @@ class DiffusionViewModel: ObservableObject {
     /// frees ANE/GPU resources. Use on memory warnings or before retrying with
     /// a different compute-units profile.
     func unloadPipeline(reason: String) {
+        if kleinPipeline != nil {
+            // Klein keeps no Core ML model resident between runs; dropping it frees the tokenizer.
+            kleinPipeline = nil
+            loadedModel = nil
+            loadedSD3Resolution = nil
+            print("[Klein] Pipeline unloaded (\(reason))")
+        }
         if pipeline != nil {
             pipeline?.unloadResources()
             pipeline = nil
@@ -197,12 +242,38 @@ class DiffusionViewModel: ObservableObject {
         }
     }
 
+    fileprivate func finishKlein(image: UIImage, finalTime: Double) {
+        stopGenerationTimer(finalTime: finalTime)
+        memoryFootprintMB = MemoryProbe.residentMB()
+        generatedImage = image
+        generatedImagesByModel[snapshotKey] = GeneratedImageSnapshot(
+            image: image, generationTime: finalTime, memoryFootprintMB: memoryFootprintMB
+        )
+        statusMessage = "FLUX.2 Klein ready."
+        isGenerating = false
+        if pendingMemoryWarningUnload { unloadPipeline(reason: "deferred-memoryWarning") }
+    }
+
+    fileprivate func failKlein(_ error: Error) {
+        isGenerating = false
+        unloadPipeline(reason: "generate-error")
+        stopGenerationTimer()
+        errorMessage = "Generation failed: \(error.localizedDescription)"
+    }
+
     func generate() async {
         guard !prompt.isEmpty, let resourceURL, isResourcesValid else { return }
 
         isGenerating = true
+        isCancelling = false
+        cancelFlag.set(false)
         errorMessage = nil
         let startTime = startGenerationTimer()
+
+        if selectedModel.isKlein {
+            await generateKlein(resourceURL: resourceURL, startTime: startTime)
+            return
+        }
 
         // First-time pipeline construction (with fallback compute-units chain)
         if pipeline == nil
@@ -267,7 +338,7 @@ class DiffusionViewModel: ObservableObject {
         do {
             MemoryProbe.log("before generateImages")
             let inferenceStart = CFAbsoluteTimeGetCurrent()
-            let cgImage = try await Task.detached(priority: .userInitiated) {
+            let cgImage = try await Task.detached(priority: .userInitiated) { [cancelFlag] in
                 try autoreleasepool { () -> CGImage? in
                     let result = try pipeline.generateImages(
                         configuration: config,
@@ -275,7 +346,7 @@ class DiffusionViewModel: ObservableObject {
                             // Per-step memory probe so we can pinpoint OOM
                             // location: conditioning vs. step-N MMDiT vs. VAE decode.
                             MemoryProbe.log("step \(progress.step + 1)/\(progress.stepCount)")
-                            return true
+                            return !cancelFlag.isSet
                         }
                     )
                     MemoryProbe.log("after MMDiT loop / before VAE decode")
@@ -284,6 +355,10 @@ class DiffusionViewModel: ObservableObject {
             }.value
             MemoryProbe.log("after generateImages")
             logElapsed("generateImages", since: inferenceStart)
+            if cancelFlag.isSet {
+                finishCancelled()
+                return
+            }
 
             let finalTime = CFAbsoluteTimeGetCurrent() - startTime
             stopGenerationTimer(finalTime: finalTime)
@@ -307,6 +382,61 @@ class DiffusionViewModel: ObservableObject {
             unloadPipeline(reason: "generate-error")
             stopGenerationTimer()
             errorMessage = "Generation failed: \(error.localizedDescription)"
+        }
+    }
+}
+
+extension DiffusionViewModel {
+    /// FLUX.2 Klein path: every stage (text, denoiser, VAE) is loaded, run and released in turn.
+    fileprivate func generateKlein(resourceURL: URL, startTime: CFAbsoluteTime) async {
+        do {
+            if kleinPipeline == nil {
+                statusMessage = "Loading FLUX.2 Klein tokenizer…"
+                let built = try await Task.detached(priority: .userInitiated) { () -> Flux2KleinPipeline in
+                    let config = MLModelConfiguration()
+                    config.computeUnits = .cpuAndNeuralEngine
+                    return try Flux2KleinPipeline(resourcesAt: resourceURL, configuration: config)
+                }.value
+                kleinPipeline = built
+                loadedModel = selectedModel
+                loadedSD3Resolution = resolution
+            }
+            guard let klein = kleinPipeline else { return }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            let seed = UInt32.random(in: UInt32.min...UInt32.max)
+            let steps = selectedModel.stepCount
+            let prompt = self.prompt
+            print("[Klein] seed: \(seed)")
+            MemoryProbe.log("before Klein generate")
+            let cancelFlag = self.cancelFlag
+            let (cgImage, timings) = try await Task.detached(priority: .userInitiated) { [weak self] in
+                let image = try klein.generateImage(prompt: prompt, seed: seed, steps: steps,
+                                                    isCancelled: { cancelFlag.isSet }) { phase in
+                    let text: String
+                    switch phase {
+                    case .encodingText: text = "Encoding prompt (Qwen3 on ANE)…"
+                    case .denoising(let step, let total): text = "Denoising step \(step)/\(total)"
+                    case .decoding: text = "Decoding image (tiled VAE)…"
+                    }
+                    MemoryProbe.log("Klein \(text)")
+                    Task { @MainActor [weak self] in
+                        if self?.isCancelling == false { self?.statusMessage = text }
+                    }
+                    return !cancelFlag.isSet
+                }
+                return (image, klein.lastTimings)
+            }.value
+            print(String(format: "[Klein] timing: text %.1fs denoise %.1fs decode %.1fs (model load %.1fs)",
+                         timings.text, timings.denoise, timings.decode, timings.load))
+            MemoryProbe.log("after Klein generate")
+            let finalTime = CFAbsoluteTimeGetCurrent() - startTime
+            finishKlein(image: UIImage(cgImage: cgImage), finalTime: finalTime)
+        } catch Flux2KleinPipeline.KleinError.cancelled {
+            print("[Klein] Generation cancelled")
+            finishCancelled()
+        } catch {
+            print("[Klein] Generation failed: \(error)")
+            failKlein(error)
         }
     }
 }
@@ -351,16 +481,30 @@ struct ContentView: View {
                     .disabled(viewModel.isGenerating)
                 }
 
+                Picker(
+                    "Model",
+                    selection: Binding(
+                        get: { viewModel.selectedModel.family },
+                        set: { viewModel.selectFamily($0) }
+                    )
+                ) {
+                    ForEach(ModelFamily.allCases) { family in
+                        Text(family.label).tag(family)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .disabled(viewModel.isGenerating)
+
                 HStack(alignment: .center, spacing: 10) {
                     Picker(
                         "Diffusion steps",
                         selection: Binding(
-                            get: { viewModel.selectedModel },
-                            set: { viewModel.selectModel($0) }
+                            get: { viewModel.selectedModel.stepCount },
+                            set: { viewModel.selectSteps($0) }
                         )
                     ) {
-                        ForEach(DiffusionModelKind.allCases) { model in
-                            Text(model.selectorLabel).tag(model)
+                        ForEach(DiffusionModelKind.stepChoices, id: \.self) { steps in
+                            Text("\(steps) steps").tag(steps)
                         }
                     }
                     .pickerStyle(.segmented)
@@ -490,20 +634,37 @@ struct ContentView: View {
             }
 
             HStack(spacing: 10) {
-                Button(action: {
-                    Task { await viewModel.generate() }
-                }) {
-                    HStack(spacing: 8) {
-                        Image(systemName: viewModel.isGenerating ? "hourglass" : "sparkles")
-                        Text(viewModel.isGenerating ? "Generating" : "Generate")
+                if viewModel.isGenerating {
+                    Button(action: {
+                        viewModel.cancelGeneration()
+                    }) {
+                        HStack(spacing: 8) {
+                            Image(systemName: viewModel.isCancelling ? "hourglass" : "xmark.circle.fill")
+                            Text(viewModel.isCancelling ? "Cancelling" : "Cancel")
+                        }
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity, minHeight: 48)
+                        .background(viewModel.isCancelling ? Color.gray : Color.red)
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                     }
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundColor(.white)
-                    .frame(maxWidth: .infinity, minHeight: 48)
-                    .background(canGenerate ? Color.blue : Color.gray)
-                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .disabled(viewModel.isCancelling)
+                } else {
+                    Button(action: {
+                        Task { await viewModel.generate() }
+                    }) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "sparkles")
+                            Text("Generate")
+                        }
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity, minHeight: 48)
+                        .background(canGenerate ? Color.blue : Color.gray)
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    }
+                    .disabled(!canGenerate)
                 }
-                .disabled(!canGenerate)
 
                 if let image = viewModel.generatedImage {
                     ShareLink(
@@ -607,16 +768,16 @@ struct ModelSettingsView: View {
                         .font(.system(size: 24, weight: .bold))
                         .foregroundColor(themeTextColor)
 
-                    Text("Download SD3 Medium Core ML resources into this app. The files are stored locally and reused across launches.")
+                    Text("Download SD3 Medium and FLUX.2 Klein Core ML resources into this app. The files are stored locally and reused across launches.")
                         .font(.system(size: 14))
                         .foregroundColor(secondaryTextColor)
                 }
 
                 VStack(alignment: .leading, spacing: 12) {
                     ForEach(SD3Resolution.allCases) { res in
-                        ForEach(DiffusionModelKind.allCases) { model in
+                        ForEach(DiffusionModelKind.resourceKinds) { model in
                             ResourceStatusRow(
-                                title: "\(model.selectorLabel) · \(res.label)",
+                                title: "\(model.resourceLabel) · \(res.label)",
                                 isReady: resourceManager.hasResources(for: model, resolution: res)
                             )
                         }
@@ -646,7 +807,7 @@ struct ModelSettingsView: View {
                             onResourcesChanged()
                         }
                     } label: {
-                        Label("Download \(selectedModel.selectorLabel) · \(resolution.label)", systemImage: "arrow.down.circle")
+                        Label("Download \(selectedModel.resourceLabel) · \(resolution.label)", systemImage: "arrow.down.circle")
                             .frame(maxWidth: .infinity, minHeight: 46)
                     }
                     .buttonStyle(.borderedProminent)
@@ -658,7 +819,7 @@ struct ModelSettingsView: View {
                             onResourcesChanged()
                         }
                     } label: {
-                        Label("Download 2-Step and 4-Step", systemImage: "square.and.arrow.down")
+                        Label("Download SD3M 2-Step and 4-Step (512)", systemImage: "square.and.arrow.down")
                             .frame(maxWidth: .infinity, minHeight: 46)
                     }
                     .buttonStyle(.bordered)

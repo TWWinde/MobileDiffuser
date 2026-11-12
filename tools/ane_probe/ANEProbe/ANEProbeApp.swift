@@ -195,12 +195,112 @@ func runChain(_ chain: String, steps: Int) async -> String {
     return out.joined(separator: "\n")
 }
 
+/// FLUX.2 Klein split chain (Models/<chain>/{Embed,Double0..,Single0..,Final}.mlmodelc) with real inputs:
+/// latent.bin [1,N,128], text.bin [1,T,7680], rope_cos.bin / rope_sin.bin [T+N,128] (float32), klein.json
+/// {image_tokens,text_tokens,double_blocks,single_blocks,sigmas}. One stage resident at a time. Runs the
+/// Euler flow-matching loop and writes the final latent to Documents/klein_latent.bin.
+func runKlein(_ chain: String) async -> String {
+    var out: [String] = []
+    func emit(_ s: String) { log(s); out.append(s) }
+    guard let dir = Bundle.main.url(forResource: chain, withExtension: nil, subdirectory: "Models") else {
+        emit("klein chain \(chain) not found"); return out.joined(separator: "\n")
+    }
+    let config = MLModelConfiguration()
+    config.computeUnits = .cpuAndNeuralEngine
+    do {
+        let meta = try JSONSerialization.jsonObject(with: Data(contentsOf: dir.appending(path: "klein.json"))) as! [String: Any]
+        let n = meta["image_tokens"] as! Int, t = meta["text_tokens"] as! Int
+        let nd = meta["double_blocks"] as! Int, ns = meta["single_blocks"] as! Int
+        let sigmas = (meta["sigmas"] as! [NSNumber]).map { $0.doubleValue }
+        func load(_ file: String, _ shape: [Int]) throws -> MLMultiArray {
+            let d = try Data(contentsOf: dir.appending(path: file))
+            let a = try MLMultiArray(shape: shape.map { NSNumber(value: $0) }, dataType: .float32)
+            precondition(d.count == a.count * 4, "\(file) size mismatch")
+            d.withUnsafeBytes { memcpy(a.dataPointer, $0.baseAddress!, d.count) }
+            return a
+        }
+        let latent = try load("latent.bin", [1, n, 128])
+        let text = try load("text.bin", [1, t, 7680])
+        let cos = try load("rope_cos.bin", [t + n, 128]), sin = try load("rope_sin.bin", [t + n, 128])
+        emit("klein=\(chain) image_tokens=\(n) text_tokens=\(t) double=\(nd) single=\(ns) steps=\(sigmas.count - 1)")
+        emit(memLine("start"))
+        var loadSum = 0.0, predSum = 0.0, firstLoad = true
+        var perKind: [String: [Double]] = [:]
+        func run(_ name: String, _ feed: [String: Any]) async throws -> MLFeatureProvider {
+            let tl = Date()
+            let m = try MLModel(contentsOf: dir.appending(path: "\(name).mlmodelc"), configuration: config)
+            let dl = Date().timeIntervalSince(tl)
+            loadSum += dl
+            if firstLoad { emit(String(format: "first-load %@ %.2fs", name, dl)) }
+            let tp = Date()
+            let r = try await m.prediction(from: MLDictionaryFeatureProvider(dictionary: feed))
+            let dp = Date().timeIntervalSince(tp)
+            predSum += dp
+            perKind[String(name.prefix(while: { !$0.isNumber })), default: []].append(dp * 1000)
+            return r
+        }
+        func arr(_ r: MLFeatureProvider, _ k: String) -> MLMultiArray { r.featureValue(for: k)!.multiArrayValue! }
+        let lp = latent.dataPointer.assumingMemoryBound(to: Float.self)
+        var stepTimes: [Double] = []
+        for s in 0..<(sigmas.count - 1) {
+            let ts = Date()
+            loadSum = 0; predSum = 0; perKind = [:]
+            let tsig = try MLMultiArray(shape: [1], dataType: .float32)
+            tsig[0] = NSNumber(value: Float(sigmas[s]))
+            let e = try await run("Embed", ["latent": latent, "text": text, "timestep": tsig])
+            var img = arr(e, "img"), txt = arr(e, "txt")
+            for i in 0..<nd {
+                let d = try await run("Double\(i)", ["img": img, "txt": txt, "mod_img": arr(e, "mod_img"),
+                                                      "mod_txt": arr(e, "mod_txt"), "rope_cos": cos, "rope_sin": sin])
+                img = arr(d, "img_out"); txt = arr(d, "txt_out")
+            }
+            var hidden = MLMultiArray(concatenating: [txt, img], axis: 1, dataType: .float32)
+            for i in 0..<ns {
+                hidden = arr(try await run("Single\(i)", ["hidden": hidden, "mod": arr(e, "mod_single"),
+                                                          "rope_cos": cos, "rope_sin": sin]), "hidden_out")
+            }
+            let noise = arr(try await run("Final", ["hidden": hidden, "temb": arr(e, "temb")]), "noise")
+            let dsig = Float(sigmas[s + 1] - sigmas[s])
+            var bad = 0
+            for k in 0..<latent.count {
+                let v = noise[k].floatValue
+                if !v.isFinite { bad += 1 }
+                lp[k] += dsig * v
+            }
+            firstLoad = false
+            let dt = Date().timeIntervalSince(ts)
+            stepTimes.append(dt)
+            func avg(_ k: String) -> Double { let a = perKind[k] ?? [0]; return a.reduce(0, +) / Double(a.count) }
+            emit(String(format: "step %d/%d total=%.2fs load=%.2fs predict=%.2fs double=%.0fms single=%.0fms nonfinite=%d",
+                        s + 1, sigmas.count - 1, dt, loadSum, predSum, avg("Double"), avg("Single"), bad))
+            emit(memLine("after step \(s + 1)"))
+        }
+        emit(String(format: "Klein %d steps total=%.1fs (warm steps avg %.2fs)", stepTimes.count, stepTimes.reduce(0, +),
+                    stepTimes.dropFirst().reduce(0, +) / Double(max(stepTimes.count - 1, 1))))
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        try Data(bytes: latent.dataPointer, count: latent.count * 4).write(to: docs.appending(path: "klein_latent.bin"))
+        emit("saved Documents/klein_latent.bin")
+        emit("RESULT OK \(chain)")
+    } catch {
+        emit("ERROR \(chain): \(error)")
+        emit(memLine("at error"))
+    }
+    return out.joined(separator: "\n")
+}
+
 @main
 struct ANEProbeApp: App {
     init() {
         setvbuf(stdout, nil, _IOLBF, 0)
         let args = ProcessInfo.processInfo.arguments
-        if let i = args.firstIndex(of: "--chain"), i + 1 < args.count {
+        if let i = args.firstIndex(of: "--klein"), i + 1 < args.count {
+            let name = args[i + 1]
+            Task.detached {
+                _ = await runKlein(name)
+                log("DONE")
+                exit(0)
+            }
+        } else if let i = args.firstIndex(of: "--chain"), i + 1 < args.count {
             let name = args[i + 1]
             let n = args.firstIndex(of: "--steps").flatMap { Int(args[$0 + 1]) } ?? 4
             Task.detached {

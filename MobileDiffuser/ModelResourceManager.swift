@@ -40,11 +40,13 @@ final class ModelResourceManager: ObservableObject {
     }
 
     func hasResources(for model: DiffusionModelKind, resolution: SD3Resolution = .default) -> Bool {
-        SD3PipelineLoader.hasRequiredResources(at: localURL(for: model.resourceFolderName(for: resolution)))
+        SD3PipelineLoader.missingResources(
+            at: localURL(for: model.resourceFolderName(for: resolution)), for: model
+        ).isEmpty
     }
 
     func downloadAll() async {
-        await downloadFolders(DiffusionModelKind.allCases.map { $0.resourceFolderName })
+        await downloadFolders(DiffusionModelKind.sd3Kinds.map { $0.resourceFolderName })
     }
 
     func downloadSelected(_ model: DiffusionModelKind, resolution: SD3Resolution = .default) async {

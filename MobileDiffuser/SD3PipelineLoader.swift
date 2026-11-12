@@ -72,6 +72,19 @@ enum SD3PipelineLoader {
         return nil
     }
 
+    /// Kind-aware resource check (FLUX.2 Klein has its own file set).
+    static func missingResources(at url: URL, for kind: DiffusionModelKind) -> [String] {
+        guard kind.isKlein else { return missingResources(at: url) }
+        return Flux2KleinPipeline.missingResources(at: url)
+    }
+
+    /// Downloaded folder first, then a folder of the same name in the app bundle.
+    static func resolveKleinResourceURL(in bundle: Bundle = .main, folderName: String) -> URL? {
+        let downloaded = ModelResourceLocations.modelsRootURL.appending(path: folderName, directoryHint: .isDirectory)
+        if FileManager.default.fileExists(atPath: downloaded.path) { return downloaded }
+        return bundle.url(forResource: folderName, withExtension: nil)
+    }
+
     static func hasRequiredResources(at url: URL) -> Bool {
         missingResources(at: url).isEmpty
     }
