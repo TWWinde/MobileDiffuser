@@ -83,9 +83,11 @@ The same Hugging Face repository also contains the source checkpoints under
 
 - Model families: Stable Diffusion 3 Medium distilled checkpoints, and FLUX.2
   Klein 4B with text encoder, denoiser and VAE all on the ANE (1024 x 1024 in
-  ~77 s warm on iPhone 15 Pro; see [docs/FLUX2_KLEIN.md](docs/FLUX2_KLEIN.md)).
+  ~33 s warm on iPhone 15 Pro with the mixed-resolution fast mode, ~77 s at
+  full resolution; see [docs/FLUX2_KLEIN.md](docs/FLUX2_KLEIN.md)).
 - App choices: model `SD3M` / `FLUX.2 Klein`, `2 steps` / `4 steps`, `512` /
   `1024`, and for SD3M 4 steps a ReSeed strength `off / 0.5 / 1.0 / 1.5`.
+  FLUX.2 Klein at 1024 adds `Fast (512 → 1024)` / `Full 1024`.
   A running generation can be cancelled.
 - Output size: 512 x 512, and 1024 x 1024 for the 4-step model (see
   [docs/ANE_1024.md](docs/ANE_1024.md)).

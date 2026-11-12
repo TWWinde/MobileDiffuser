@@ -28,6 +28,17 @@ class DiffusionViewModel: ObservableObject {
 
     private var pipeline: (any StableDiffusionPipelineProtocol)?
     private var kleinPipeline: Flux2KleinPipeline?
+    private var kleinLowPipeline: Flux2KleinPipeline?
+    /// FLUX.2 Klein at 1024: run all but the last step at 512, then finish at 1024 (about 2.5x faster).
+    @Published var kleinFast: Bool = true
+
+    /// The fast mode needs the 512 denoiser stages next to the 1024 ones.
+    var kleinFastAvailable: Bool {
+        guard selectedModel.isKlein, resolution == .r1024,
+              let url = SD3PipelineLoader.resolveKleinResourceURL(
+                  folderName: selectedModel.resourceFolderName(for: .r512)) else { return false }
+        return SD3PipelineLoader.missingResources(at: url, for: selectedModel).isEmpty
+    }
     private let cancelFlag = CancelFlag()
     @Published private(set) var isCancelling: Bool = false
 
@@ -191,6 +202,7 @@ class DiffusionViewModel: ObservableObject {
         if kleinPipeline != nil {
             // Klein keeps no Core ML model resident between runs; dropping it frees the tokenizer.
             kleinPipeline = nil
+            kleinLowPipeline = nil
             loadedModel = nil
             loadedSD3Resolution = nil
             print("[Klein] Pipeline unloaded (\(reason))")
@@ -402,6 +414,18 @@ extension DiffusionViewModel {
                 loadedSD3Resolution = resolution
             }
             guard let klein = kleinPipeline else { return }
+            let useFast = kleinFast && kleinFastAvailable
+            if useFast, kleinLowPipeline == nil,
+               let lowURL = SD3PipelineLoader.resolveKleinResourceURL(
+                   folderName: selectedModel.resourceFolderName(for: .r512)) {
+                kleinLowPipeline = try await Task.detached(priority: .userInitiated) { () -> Flux2KleinPipeline in
+                    let config = MLModelConfiguration()
+                    config.computeUnits = .cpuAndNeuralEngine
+                    return try Flux2KleinPipeline(resourcesAt: lowURL, configuration: config)
+                }.value
+            }
+            let low = useFast ? kleinLowPipeline : nil
+            print("[Klein] mode: \(low != nil ? "fast (512 start, 1024 finish)" : "full resolution")")
             try? await Task.sleep(nanoseconds: 100_000_000)
             let seed = UInt32.random(in: UInt32.min...UInt32.max)
             let steps = selectedModel.stepCount
@@ -411,6 +435,7 @@ extension DiffusionViewModel {
             let cancelFlag = self.cancelFlag
             let (cgImage, timings) = try await Task.detached(priority: .userInitiated) { [weak self] in
                 let image = try klein.generateImage(prompt: prompt, seed: seed, steps: steps,
+                                                    lowRes: low, lowSteps: Swift.max(1, steps - 1), highSteps: 1,
                                                     isCancelled: { cancelFlag.isSet }) { phase in
                     let text: String
                     switch phase {
@@ -523,6 +548,15 @@ struct ContentView: View {
                     }
                     .pickerStyle(.segmented)
                     .frame(width: 120)
+                    .disabled(viewModel.isGenerating)
+                }
+
+                if viewModel.kleinFastAvailable {
+                    Picker("Klein speed", selection: $viewModel.kleinFast) {
+                        Text("Fast (512 → 1024)").tag(true)
+                        Text("Full 1024").tag(false)
+                    }
+                    .pickerStyle(.segmented)
                     .disabled(viewModel.isGenerating)
                 }
 

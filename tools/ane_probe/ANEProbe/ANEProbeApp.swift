@@ -288,12 +288,101 @@ func runKlein(_ chain: String) async -> String {
     return out.joined(separator: "\n")
 }
 
+/// Where does the chain overhead come from? One Klein single-stream stage, three ways:
+///  A  load once, same float32 inputs every time (the isolated-probe number)
+///  B  reload the model before every prediction (what the per-stage pipeline does)
+///  C  load once, feed each output back as the next input (Core ML-owned output buffers as inputs)
+func runKleinBench(_ chain: String, stage: String, n: Int) async -> String {
+    var out: [String] = []
+    func emit(_ s: String) { log(s); out.append(s) }
+    guard let dir = Bundle.main.url(forResource: chain, withExtension: nil, subdirectory: "Models") else {
+        emit("chain \(chain) not found"); return ""
+    }
+    let config = MLModelConfiguration()
+    config.computeUnits = .cpuAndNeuralEngine
+    let url = dir.appending(path: "\(stage).mlmodelc")
+    do {
+        func fill(_ shape: [NSNumber], _ scale: Float) throws -> MLMultiArray {
+            let a = try MLMultiArray(shape: shape, dataType: .float32)
+            let p = a.dataPointer.assumingMemoryBound(to: Float.self)
+            for k in 0..<a.count { p[k] = Float.random(in: -1...1) * scale }
+            return a
+        }
+        var model = try MLModel(contentsOf: url, configuration: config)
+        var feed: [String: Any] = [:]
+        for (name, d) in model.modelDescription.inputDescriptionsByName {
+            feed[name] = try fill(d.multiArrayConstraint!.shape, name == "mod" ? 0.1 : 1)
+        }
+        func ms(_ body: () async throws -> Void) async rethrows -> Double {
+            let t = Date(); try await body(); return Date().timeIntervalSince(t) * 1000
+        }
+        func stats(_ a: [Double]) -> String {
+            String(format: "avg=%.0fms min=%.0fms max=%.0fms n=%d", a.reduce(0, +) / Double(a.count), a.min()!, a.max()!, a.count)
+        }
+        var r = try await model.prediction(from: MLDictionaryFeatureProvider(dictionary: feed))   // warm-up
+        let o0 = r.featureValue(for: "hidden_out")!.multiArrayValue!
+        emit("bench stage=\(stage) outputType=\(o0.dataType.rawValue) (65568=float32, 65552=float16) hasPixelBuffer=\(o0.pixelBuffer != nil)")
+        var a: [Double] = [], b: [Double] = [], bl: [Double] = [], c: [Double] = []
+        for _ in 0..<n {
+            a.append(try await ms { r = try await model.prediction(from: MLDictionaryFeatureProvider(dictionary: feed)) })
+        }
+        emit("A same-model-same-input  " + stats(a))
+        for _ in 0..<n {
+            bl.append(try await ms { model = try MLModel(contentsOf: url, configuration: config) })
+            b.append(try await ms { r = try await model.prediction(from: MLDictionaryFeatureProvider(dictionary: feed)) })
+        }
+        emit("B reload-each-time       " + stats(b) + "   reload " + stats(bl))
+        var f2 = feed
+        for _ in 0..<n {
+            f2["hidden"] = r.featureValue(for: "hidden_out")!.multiArrayValue!
+            c.append(try await ms { r = try await model.prediction(from: MLDictionaryFeatureProvider(dictionary: f2)) })
+        }
+        emit("C output-fed-back        " + stats(c))
+        // D: several different stages kept resident, run round-robin (no loads between predictions)
+        // E: the same stages loaded fresh before each prediction and released after (the pipeline's pattern)
+        model = try MLModel(contentsOf: url, configuration: config)   // keep only one instance alive
+        let names = (0..<6).map { "Single\($0)" }
+        var d: [Double] = [], e: [Double] = [], el: [Double] = []
+        // (Keeping six 1024 stages resident at once gets the app killed by jetsam, so D keeps just two.)
+        do {
+            let resident = try names.prefix(2).map { try MLModel(contentsOf: dir.appending(path: "\($0).mlmodelc"), configuration: config) }
+            for m in resident { _ = try await m.prediction(from: MLDictionaryFeatureProvider(dictionary: feed)) }
+            for _ in 0..<4 {
+                for m in resident {
+                    d.append(try await ms { r = try await m.prediction(from: MLDictionaryFeatureProvider(dictionary: feed)) })
+                }
+            }
+        }
+        emit("D two-resident-alternating  " + stats(d))
+        for _ in 0..<2 {
+            for nm in names {
+                var m: MLModel? = nil
+                el.append(try await ms { m = try MLModel(contentsOf: dir.appending(path: "\(nm).mlmodelc"), configuration: config) })
+                e.append(try await ms { r = try await m!.prediction(from: MLDictionaryFeatureProvider(dictionary: feed)) })
+                m = nil
+            }
+        }
+        emit("E six-load-run-release     " + stats(e) + "   load " + stats(el))
+        emit(memLine("after D/E"))
+        emit("thermal=\(ProcessInfo.processInfo.thermalState.rawValue) (0 nominal, 1 fair, 2 serious, 3 critical)")
+        emit("RESULT OK kbench")
+    } catch { emit("ERROR kbench: \(error)") }
+    return out.joined(separator: "\n")
+}
+
 @main
 struct ANEProbeApp: App {
     init() {
         setvbuf(stdout, nil, _IOLBF, 0)
         let args = ProcessInfo.processInfo.arguments
-        if let i = args.firstIndex(of: "--klein"), i + 1 < args.count {
+        if let i = args.firstIndex(of: "--kbench"), i + 2 < args.count {
+            let chain = args[i + 1], stage = args[i + 2]
+            Task.detached {
+                _ = await runKleinBench(chain, stage: stage, n: 8)
+                log("DONE")
+                exit(0)
+            }
+        } else if let i = args.firstIndex(of: "--klein"), i + 1 < args.count {
             let name = args[i + 1]
             Task.detached {
                 _ = await runKlein(name)

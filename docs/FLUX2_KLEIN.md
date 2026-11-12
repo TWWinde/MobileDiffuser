@@ -28,6 +28,32 @@ inside the chain), VAE tile 327 ms; all ops on the ANE.
 on the iPhone); the full 512 chain has not been timed on device. The 2-step option runs the same
 4-step weights on a 2-step schedule.
 
+## Fast mode: low-resolution start, high-resolution finish
+
+A full 1024 step costs ~17.5 s on the phone, a 512 step ~2.7 s. The app's default for Klein at 1024
+("Fast (512 → 1024)") runs the first 3 steps of the 512 schedule on the 512 stages, upsamples the
+clean-image estimate x2 (bicubic, in the unpatchified VAE latent space), re-noises it to the sigma where
+the last 1024 step starts (0.767), and runs only that last step on the 1024 stages. No retraining, no
+new conversion — both stage sets already exist.
+
+| Mode (iPhone 15 Pro, warm, in the app) | Text | Denoise | VAE | Total |
+| --- | ---: | ---: | ---: | ---: |
+| Full 1024, 4 steps | 2.3 s | 69.9 s | 4.7 s | ~77 s |
+| Fast (3 x 512 + 1 x 1024) | 1.7 s | 26.1-26.8 s | 4.7 s | ~33 s |
+
+Checked by eye on three prompts against full 1024 (sharp, no repeated texture, neon lettering
+correct); not a systematic evaluation. The composition comes from the 512 steps, so a seed does not
+give the same image as full 1024. The first fast run also compiles the 512 stages (once).
+
+Other measured engineering points:
+
+- The next stage is loaded on a background queue while the current one runs (two stages resident);
+  load wait per image drops to ~0.1 s.
+- Stage outputs are already float16; passing them on costs nothing.
+- Running a stage right after a *different* stage costs ~50-90 ms more than repeating the same one
+  (533 ms vs 587-617 ms for a 1024 single block), even with both resident: an ANE model-switch cost
+  that comes with one block per stage. Keeping six 1024 stages resident gets the app killed.
+
 ## What needed care
 
 - **Text length.** Klein pads prompts to 512 tokens; 256 gives visually equivalent images

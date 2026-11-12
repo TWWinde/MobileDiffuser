@@ -40,6 +40,7 @@ func savePNG(_ image: CGImage, _ path: String) {
 if opts["klein"] != nil {
     let klein = try Flux2KleinPipeline(resourcesAt: URL(fileURLWithPath: resources), configuration: mlConfig)
     let prompt = opts["prompt"] ?? "A photo of a red fox in a snowy forest, highly detailed"
+    if opts["prefetch"] == "0" { klein.prefetchStages = false }
     if opts["tokens"] != nil {
         let (ids, n) = klein.tokenize(prompt)
         print("tokens \(n): \(ids.prefix(n).map(String.init).joined(separator: " "))")
@@ -51,8 +52,12 @@ if opts["klein"] != nil {
         initial = d.withUnsafeBytes { Array($0.bindMemory(to: Float.self)) }
     }
     let tk = CFAbsoluteTimeGetCurrent()
+    // --lowres <coreml_flux2_klein_512> [--lo-steps 3 --hi-steps 1]: low-res start, high-res finish
+    let lowRes = try opts["lowres"].map { try Flux2KleinPipeline(resourcesAt: URL(fileURLWithPath: $0), configuration: mlConfig) }
     let image = try klein.generateImage(prompt: prompt, seed: UInt32(opts["seed"] ?? "42")!,
-                                        steps: Int(opts["steps"] ?? "4")!, initialLatent: initial) { phase in
+                                        steps: Int(opts["steps"] ?? "4")!, initialLatent: initial,
+                                        lowRes: lowRes, lowSteps: Int(opts["lo-steps"] ?? "3")!,
+                                        highSteps: Int(opts["hi-steps"] ?? "1")!) { phase in
         print("phase \(phase)")
         return true
     }

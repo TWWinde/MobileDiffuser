@@ -161,13 +161,52 @@ public final class Flux2KleinPipeline {
         return MLShapedArray<Float>(converting: a).scalars
     }
 
-    /// Load one stage, run it, release it.
-    private func run(_ name: String, _ feed: [String: Any]) throws -> MLFeatureProvider {
-        if isCancelled() { throw KleinError.cancelled }
+    /// A stage being loaded on a background queue while the previous one runs.
+    private final class Pending {
+        let name: String
+        let group = DispatchGroup()
+        var result: Result<MLModel, Error>?
+        init(name: String) { self.name = name }
+    }
+    private var pending: Pending?
+    private let prefetchQueue = DispatchQueue(label: "klein.stage-prefetch", qos: .userInitiated)
+    /// Set false to load every stage synchronously (for A/B timing).
+    public var prefetchStages = true
+
+    private func prefetch(_ name: String) {
+        guard prefetchStages, let u = Self.locate("\(name).mlmodelc", root: root) else { return }
+        let p = Pending(name: name)
+        p.group.enter()
+        pending = p
+        let configuration = self.configuration
+        prefetchQueue.async {
+            p.result = Result { try MLModel(contentsOf: u, configuration: configuration) }
+            p.group.leave()
+        }
+    }
+
+    /// The model for `name`: the prefetched one if it is the stage that was announced, else a fresh load.
+    private func model(_ name: String) throws -> MLModel {
         let t0 = CFAbsoluteTimeGetCurrent()
-        let model = try MLModel(contentsOf: try url("\(name).mlmodelc"), configuration: configuration)
-        lastTimings.load += CFAbsoluteTimeGetCurrent() - t0
-        return try model.prediction(from: MLDictionaryFeatureProvider(dictionary: feed))
+        defer { lastTimings.load += CFAbsoluteTimeGetCurrent() - t0 }
+        if let p = pending {
+            pending = nil
+            p.group.wait()                       // never leave a load running behind our back
+            if p.name == name, let r = p.result { return try r.get() }
+        }
+        return try MLModel(contentsOf: try url("\(name).mlmodelc"), configuration: configuration)
+    }
+
+    private func dropPending() {
+        if let p = pending { pending = nil; p.group.wait() }
+    }
+
+    /// Load one stage (or take the prefetched one), start loading `next`, run, release.
+    private func run(_ name: String, next: String? = nil, _ feed: [String: Any]) throws -> MLFeatureProvider {
+        if isCancelled() { dropPending(); throw KleinError.cancelled }
+        let m = try model(name)
+        if let next { prefetch(next) }
+        return try m.prediction(from: MLDictionaryFeatureProvider(dictionary: feed))
     }
 
     private func out(_ r: MLFeatureProvider, _ key: String) throws -> MLMultiArray {
@@ -225,7 +264,8 @@ public final class Flux2KleinPipeline {
         let tp = text.dataPointer.assumingMemoryBound(to: Float.self)
         var tapIndex = 0
         for s in 0..<textStages {
-            x = try out(try run("TextStage\(s)", ["hidden": x, "mask": mask, "rope_cos": cos, "rope_sin": sin]), "hidden_out")
+            x = try out(try run("TextStage\(s)", next: s + 1 < textStages ? "TextStage\(s + 1)" : "Embed",
+                                ["hidden": x, "mask": mask, "rope_cos": cos, "rope_sin": sin]), "hidden_out")
             if taps.contains((s + 1) * layersPerStage) {
                 let h = floats(x)
                 guard h.allSatisfy({ $0.isFinite }) else { throw KleinError.nonFinite("text encoder stage \(s)") }
@@ -263,59 +303,172 @@ public final class Flux2KleinPipeline {
 
     // MARK: - Generate
 
-    /// - Parameter initialLatent: optional packed noise [N * 128] (overrides `seed`; used for parity checks).
-    /// - Parameter isCancelled: polled before every stage; returning true aborts with `KleinError.cancelled`.
-    public func generateImage(prompt: String, seed: UInt32, steps: Int = 4, initialLatent: [Float]? = nil,
-                              isCancelled: @escaping () -> Bool = { false },
-                              progress: (Phase) -> Bool = { _ in true }) throws -> CGImage {
-        lastTimings = Timings()
-        self.isCancelled = isCancelled
-        defer { self.isCancelled = { false } }
+    /// Euler steps over the consecutive sigmas `sig`, updating `latent` [1, N, 128] in place.
+    /// Returns the clean-image estimate (x0 = x - sigma * v) of the last step.
+    private func denoise(latent: MLMultiArray, text: MLMultiArray, sig: [Double], afterLast: String?,
+                         stepBase: Int, totalSteps: Int, progress: (Phase) -> Bool) throws -> [Float] {
         let N = imageTokens, T = textTokens, C = latentChannels
-        guard progress(.encodingText) else { throw KleinError.cancelled }
-        var t0 = CFAbsoluteTimeGetCurrent()
-        let text = try encodeText(prompt)
-        lastTimings.text = CFAbsoluteTimeGetCurrent() - t0
-
-        let latent = try array([1, N, C])
         let lp = latent.dataPointer.assumingMemoryBound(to: Float.self)
-        if let initialLatent {
-            guard initialLatent.count == N * C else { throw KleinError.badResource("initialLatent") }
-            for i in 0..<(N * C) { lp[i] = initialLatent[i] }
-        } else {
-            var rng = TorchRandomSource(seed: seed)
-            let noise = rng.normalArray(count: N * C)
-            for i in 0..<(N * C) { lp[i] = Float(noise[i]) }
-        }
         let cos = try loadFloats("rope_cos.bin", shape: [T + N, 128])
         let sin = try loadFloats("rope_sin.bin", shape: [T + N, 128])
-        let sig = Self.sigmas(imageTokens: N, steps: steps)
-
-        t0 = CFAbsoluteTimeGetCurrent()
-        for s in 0..<steps {
-            guard progress(.denoising(step: s + 1, total: steps)) else { throw KleinError.cancelled }
+        var x0 = [Float](repeating: 0, count: N * C)
+        let count = sig.count - 1
+        for s in 0..<count {
+            guard progress(.denoising(step: stepBase + s + 1, total: totalSteps)) else { throw KleinError.cancelled }
             let ts = try array([1])
             ts[0] = NSNumber(value: Float(sig[s]))
-            let e = try run("Embed", ["latent": latent, "text": text, "timestep": ts])
+            let e = try run("Embed", next: "Double0", ["latent": latent, "text": text, "timestep": ts])
             var img = try out(e, "img"), txt = try out(e, "txt")
             let modImg = try out(e, "mod_img"), modTxt = try out(e, "mod_txt")
             for i in 0..<doubleBlocks {
-                let d = try run("Double\(i)", ["img": img, "txt": txt, "mod_img": modImg, "mod_txt": modTxt,
-                                              "rope_cos": cos, "rope_sin": sin])
+                let d = try run("Double\(i)", next: i + 1 < doubleBlocks ? "Double\(i + 1)" : "Single0",
+                                ["img": img, "txt": txt, "mod_img": modImg, "mod_txt": modTxt,
+                                 "rope_cos": cos, "rope_sin": sin])
                 img = try out(d, "img_out"); txt = try out(d, "txt_out")
             }
             var hiddenState = MLMultiArray(concatenating: [txt, img], axis: 1, dataType: .float32)
             let modSingle = try out(e, "mod_single")
             for i in 0..<singleBlocks {
-                hiddenState = try out(try run("Single\(i)", ["hidden": hiddenState, "mod": modSingle,
-                                                             "rope_cos": cos, "rope_sin": sin]), "hidden_out")
+                hiddenState = try out(try run("Single\(i)", next: i + 1 < singleBlocks ? "Single\(i + 1)" : "Final",
+                                              ["hidden": hiddenState, "mod": modSingle,
+                                               "rope_cos": cos, "rope_sin": sin]), "hidden_out")
             }
-            let noise = floats(try out(try run("Final", ["hidden": hiddenState, "temb": try out(e, "temb")]), "noise"))
+            let noise = floats(try out(try run("Final", next: s + 1 < count ? "Embed" : afterLast,
+                                               ["hidden": hiddenState, "temb": try out(e, "temb")]), "noise"))
             guard noise.count == N * C, noise.allSatisfy({ $0.isFinite }) else {
-                throw KleinError.nonFinite("denoiser step \(s + 1)")
+                throw KleinError.nonFinite("denoiser step \(stepBase + s + 1)")
             }
-            var d = Float(sig[s + 1] - sig[s])
-            noise.withUnsafeBufferPointer { vDSP_vsma($0.baseAddress!, 1, &d, lp, 1, lp, 1, vDSP_Length(N * C)) }
+            noise.withUnsafeBufferPointer { np in
+                if s == count - 1 {
+                    var m = -Float(sig[s])
+                    vDSP_vsma(np.baseAddress!, 1, &m, lp, 1, &x0, 1, vDSP_Length(N * C))
+                }
+                var d = Float(sig[s + 1] - sig[s])
+                vDSP_vsma(np.baseAddress!, 1, &d, lp, 1, lp, 1, vDSP_Length(N * C))
+            }
+        }
+        return x0
+    }
+
+    /// Bicubic x2 upsampling (PyTorch `interpolate(mode: bicubic, align_corners: false)`) of a packed,
+    /// normalised latent [side*side, 128], done in the unpatchified 32-channel VAE space.
+    func upsample2x(packed lat: [Float], side: Int) -> [Float] {
+        let h = side * 2, H = h * 2                     // unpatchified size before / after
+        var z = [Float](repeating: 0, count: 32 * h * h)
+        for y in 0..<side {
+            for x in 0..<side {
+                let base = (y * side + x) * 128
+                for ch in 0..<128 {
+                    let c = ch / 4, dy = (ch % 4) / 2, dx = ch % 2
+                    z[c * h * h + (2 * y + dy) * h + (2 * x + dx)] = lat[base + ch] * bnStd[ch] + bnMean[ch]
+                }
+            }
+        }
+        func weights(_ t: Float) -> [Float] {           // cubic convolution, A = -0.75
+            let A: Float = -0.75
+            func near(_ x: Float) -> Float { ((A + 2) * x - (A + 3)) * x * x + 1 }
+            func far(_ x: Float) -> Float { ((A * x - 5 * A) * x + 8 * A) * x - 4 * A }
+            return [far(t + 1), near(t), near(1 - t), far(2 - t)]
+        }
+        // taps for every output coordinate (same along both axes)
+        var idx = [[Int]](), wts = [[Float]]()
+        for o in 0..<H {
+            let src = (Float(o) + 0.5) / 2 - 0.5
+            let f = Int(src.rounded(.down))
+            idx.append((-1...2).map { Swift.min(Swift.max(f + $0, 0), h - 1) })
+            wts.append(weights(src - Float(f)))
+        }
+        var up = [Float](repeating: 0, count: 32 * H * H)
+        var tmp = [Float](repeating: 0, count: h * H)   // horizontally resampled plane [h rows, H cols]
+        for c in 0..<32 {
+            for y in 0..<h {
+                for X in 0..<H {
+                    var v: Float = 0
+                    for k in 0..<4 { v += wts[X][k] * z[c * h * h + y * h + idx[X][k]] }
+                    tmp[y * H + X] = v
+                }
+            }
+            for Y in 0..<H {
+                for X in 0..<H {
+                    var v: Float = 0
+                    for k in 0..<4 { v += wts[Y][k] * tmp[idx[Y][k] * H + X] }
+                    up[c * H * H + Y * H + X] = v
+                }
+            }
+        }
+        let S = side * 2
+        var out = [Float](repeating: 0, count: S * S * 128)
+        for y in 0..<S {
+            for x in 0..<S {
+                let base = (y * S + x) * 128
+                for ch in 0..<128 {
+                    let c = ch / 4, dy = (ch % 4) / 2, dx = ch % 2
+                    out[base + ch] = (up[c * H * H + (2 * y + dy) * H + (2 * x + dx)] - bnMean[ch]) / bnStd[ch]
+                }
+            }
+        }
+        return out
+    }
+
+    /// - Parameter initialLatent: optional packed noise [N * 128] (overrides `seed`; used for parity checks).
+    /// - Parameter isCancelled: polled before every stage; returning true aborts with `KleinError.cancelled`.
+    /// - Parameter lowRes: a pipeline for the half-resolution stages. When given, the first `lowSteps` steps
+    ///   of the schedule run there, the clean-image estimate is upsampled x2 and re-noised, and only the last
+    ///   `highSteps` steps run at this pipeline's resolution ("low-res start, high-res finish").
+    public func generateImage(prompt: String, seed: UInt32, steps: Int = 4, initialLatent: [Float]? = nil,
+                              lowRes: Flux2KleinPipeline? = nil, lowSteps: Int = 3, highSteps: Int = 1,
+                              isCancelled: @escaping () -> Bool = { false },
+                              progress: (Phase) -> Bool = { _ in true }) throws -> CGImage {
+        lastTimings = Timings()
+        self.isCancelled = isCancelled
+        lowRes?.isCancelled = isCancelled
+        lowRes?.prefetchStages = prefetchStages
+        lowRes?.lastTimings = Timings()
+        defer {
+            self.isCancelled = { false }; dropPending()
+            lowRes?.isCancelled = { false }; lowRes?.dropPending()
+        }
+        let N = imageTokens, C = latentChannels
+        guard progress(.encodingText) else { throw KleinError.cancelled }
+        var t0 = CFAbsoluteTimeGetCurrent()
+        let text = try encodeText(prompt)
+        lastTimings.text = CFAbsoluteTimeGetCurrent() - t0
+        dropPending()                                    // encodeText announces "Embed" of this resolution
+
+        var rng = TorchRandomSource(seed: seed)
+        let latent = try array([1, N, C])
+        let lp = latent.dataPointer.assumingMemoryBound(to: Float.self)
+        t0 = CFAbsoluteTimeGetCurrent()
+        if let lo = lowRes {
+            guard lo.imageTokens * 4 == N, lo.textTokens == textTokens, lowSteps >= 1, highSteps >= 1,
+                  lowSteps <= steps, highSteps <= steps else { throw KleinError.badResource("lowRes configuration") }
+            let n = lo.imageTokens
+            let loLatent = try array([1, n, C])
+            let lop = loLatent.dataPointer.assumingMemoryBound(to: Float.self)
+            let noise = rng.normalArray(count: n * C)
+            for i in 0..<(n * C) { lop[i] = Float(noise[i]) }
+            let sigLo = Array(Self.sigmas(imageTokens: n, steps: steps).prefix(lowSteps + 1))
+            let sigHi = Array(Self.sigmas(imageTokens: N, steps: steps).suffix(highSteps + 1))
+            let total = lowSteps + highSteps
+            let x0 = try lo.denoise(latent: loLatent, text: text, sig: sigLo, afterLast: nil,
+                                    stepBase: 0, totalSteps: total, progress: progress)
+            let up = upsample2x(packed: x0, side: Int(Double(n).squareRoot()))
+            let eps = rng.normalArray(count: N * C)
+            let sr = Float(sigHi[0])
+            for i in 0..<(N * C) { lp[i] = (1 - sr) * up[i] + sr * Float(eps[i]) }
+            _ = try denoise(latent: latent, text: text, sig: sigHi, afterLast: "KleinVAEDecoder",
+                            stepBase: lowSteps, totalSteps: total, progress: progress)
+            lastTimings.load += lo.lastTimings.load
+        } else {
+            if let initialLatent {
+                guard initialLatent.count == N * C else { throw KleinError.badResource("initialLatent") }
+                for i in 0..<(N * C) { lp[i] = initialLatent[i] }
+            } else {
+                let noise = rng.normalArray(count: N * C)
+                for i in 0..<(N * C) { lp[i] = Float(noise[i]) }
+            }
+            _ = try denoise(latent: latent, text: text, sig: Self.sigmas(imageTokens: N, steps: steps),
+                            afterLast: "KleinVAEDecoder", stepBase: 0, totalSteps: steps, progress: progress)
         }
         lastTimings.denoise = CFAbsoluteTimeGetCurrent() - t0
 
@@ -352,39 +505,60 @@ public final class Flux2KleinPipeline {
         var wsum = [Float](repeating: 0, count: outH * outW)
         let ramp: [Float] = (0..<tp).map { Swift.min(Float($0) + 0.5, Float(tp - $0) - 0.5) }
 
-        let t0 = CFAbsoluteTimeGetCurrent()
-        let model = try MLModel(contentsOf: try url("KleinVAEDecoder.mlmodelc"), configuration: configuration)
-        lastTimings.load += CFAbsoluteTimeGetCurrent() - t0
+        let model = try self.model("KleinVAEDecoder")
         let input = try array([1, 32, tile, tile])
         let ip = input.dataPointer.assumingMemoryBound(to: Float.self)
+        var rowW = [Float](repeating: 0, count: tp)
         for ty in starts {
             for tx in starts {
                 if isCancelled() { throw KleinError.cancelled }
-                for c in 0..<32 {
-                    for y in 0..<tile {
-                        for x in 0..<tile { ip[(c * tile + y) * tile + x] = z[c * H * W + (ty + y) * W + tx + x] }
+                z.withUnsafeBufferPointer { zp in
+                    for c in 0..<32 {
+                        for y in 0..<tile {
+                            memcpy(ip + (c * tile + y) * tile, zp.baseAddress! + c * H * W + (ty + y) * W + tx,
+                                   tile * MemoryLayout<Float>.size)
+                        }
                     }
                 }
                 let r = try model.prediction(from: MLDictionaryFeatureProvider(dictionary: ["latent": input]))
                 let px = floats(try out(r, "image"))
                 guard px.count == 3 * tp * tp else { throw KleinError.badResource("VAE output shape") }
                 let oy = ty * scale, ox = tx * scale
-                for y in 0..<tp {
-                    for x in 0..<tp {
-                        let w = ramp[y] * ramp[x]
-                        let o = (oy + y) * outW + ox + x
-                        wsum[o] += w
-                        for c in 0..<3 { acc[c * outH * outW + o] += px[(c * tp + y) * tp + x] * w }
+                px.withUnsafeBufferPointer { pp in
+                    for y in 0..<tp {
+                        var wy = ramp[y]
+                        vDSP_vsmul(ramp, 1, &wy, &rowW, 1, vDSP_Length(tp))            // w(y, x) = ramp[y] * ramp[x]
+                        let o = (oy + y) * outW + ox
+                        wsum.withUnsafeMutableBufferPointer {
+                            vDSP_vadd($0.baseAddress! + o, 1, rowW, 1, $0.baseAddress! + o, 1, vDSP_Length(tp))
+                        }
+                        acc.withUnsafeMutableBufferPointer { ap in
+                            for c in 0..<3 {
+                                let dst = ap.baseAddress! + c * outH * outW + o
+                                vDSP_vma(pp.baseAddress! + (c * tp + y) * tp, 1, rowW, 1, dst, 1, dst, 1, vDSP_Length(tp))
+                            }
+                        }
                     }
                 }
             }
         }
-        var rgb = [UInt8](repeating: 0, count: outH * outW * 3)
-        for o in 0..<(outH * outW) {
-            for c in 0..<3 {
-                let v = acc[c * outH * outW + o] / wsum[o]
-                guard v.isFinite else { throw KleinError.nonFinite("VAE output") }
-                rgb[o * 3 + c] = UInt8(Swift.max(0, Swift.min(255, (v + 1) * 127.5 + 0.5)))
+        // acc / wsum -> [0, 255] -> interleaved RGB8
+        let plane = outH * outW
+        var rgb = [UInt8](repeating: 0, count: plane * 3)
+        var tmp = [Float](repeating: 0, count: plane)
+        var one: Float = 1, half: Float = 127.5, lo: Float = 0, hi: Float = 255
+        for c in 0..<3 {
+            acc.withUnsafeBufferPointer { ap in
+                vDSP_vdiv(wsum, 1, ap.baseAddress! + c * plane, 1, &tmp, 1, vDSP_Length(plane))   // acc / wsum
+            }
+            guard tmp[0].isFinite, tmp[plane / 2].isFinite, tmp[plane - 1].isFinite else {
+                throw KleinError.nonFinite("VAE output")
+            }
+            vDSP_vsadd(tmp, 1, &one, &tmp, 1, vDSP_Length(plane))
+            vDSP_vsmul(tmp, 1, &half, &tmp, 1, vDSP_Length(plane))
+            vDSP_vclip(tmp, 1, &lo, &hi, &tmp, 1, vDSP_Length(plane))
+            rgb.withUnsafeMutableBufferPointer { rp in
+                vDSP_vfixru8(tmp, 1, rp.baseAddress! + c, 3, vDSP_Length(plane))
             }
         }
         guard let provider = CGDataProvider(data: Data(rgb) as CFData),
