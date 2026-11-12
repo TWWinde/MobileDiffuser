@@ -5,7 +5,7 @@
 
 <br>
 
-**[Project page](https://twwinde.github.io/mobilediffuser-project-page/)** · [Blog post](https://twwinde.github.io/posts/2026/11/mobilediffuser/) · [Models on Hugging Face](https://huggingface.co/Wenwu2000/MobileDiffuser-SD3-medium) · [Demo video](https://www.youtube.com/shorts/m5wlOkeY5Bw)
+**[Project page](https://twwinde.github.io/mobilediffuser-project-page/)** · [Models on Hugging Face](https://huggingface.co/Wenwu2000/MobileDiffuser-SD3-medium) · [Demo video](https://www.youtube.com/shorts/m5wlOkeY5Bw)
 
 MobileDiffuser is an experimental iOS app for running distilled Stable
 Diffusion 3 Medium locally on iPhone. The app targets 512 x 512 generation,
