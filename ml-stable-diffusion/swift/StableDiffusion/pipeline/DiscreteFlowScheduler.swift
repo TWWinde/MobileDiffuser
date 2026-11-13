@@ -53,6 +53,9 @@ public final class DiscreteFlowScheduler: Scheduler {
         self.timeSteps = tDistribution.dropLast().map { Int($0 * trainSteps) }
     }
 
+    /// Noise level at the start of step `index` (0 ... stepCount).
+    public func sigma(atStep index: Int) -> Float { sigmas[Swift.min(Swift.max(index, 0), sigmas.count - 1)] }
+
     func sigmaFromTimestep(_ timestep: Float) -> Float {
         if shift == 1.0 {
             return timestep / trainSteps

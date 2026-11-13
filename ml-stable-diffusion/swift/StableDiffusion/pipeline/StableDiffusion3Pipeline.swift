@@ -130,6 +130,60 @@ public struct StableDiffusion3Pipeline: StableDiffusionPipelineProtocol {
     ///   - progressHandler: Callback to perform after each step, stops on receiving false response
     /// - Returns: An array of `imageCount` optional images.
     ///            The images will be nil if safety checks were performed and found the result to be un-safe
+    /// Latents handed between the low- and full-resolution phases of mixed-resolution sampling.
+    public final class MixedResolutionState: @unchecked Sendable {
+        /// Clean-image estimates (x0) of the last denoising step that ran.
+        public var lastDenoisedLatents: [MLShapedArray<Float32>] = []
+        /// Upsampled x0 to start from when `Configuration.startStep > 0`.
+        public var initialDenoisedLatent: MLShapedArray<Float32>?
+        public init() {}
+    }
+    public let mixedResolution = MixedResolutionState()
+
+    /// Bicubic x2 upsampling of an NCHW latent (PyTorch `interpolate(mode: bicubic, align_corners: false)`).
+    public static func upsample2x(_ latent: MLShapedArray<Float32>) -> MLShapedArray<Float32> {
+        let n = latent.shape[0], c = latent.shape[1], h = latent.shape[2], w = latent.shape[3]
+        let H = h * 2, W = w * 2
+        func weights(_ t: Float) -> [Float] {
+            let A: Float = -0.75
+            func near(_ x: Float) -> Float { ((A + 2) * x - (A + 3)) * x * x + 1 }
+            func far(_ x: Float) -> Float { ((A * x - 5 * A) * x + 8 * A) * x - 4 * A }
+            return [far(t + 1), near(t), near(1 - t), far(2 - t)]
+        }
+        func taps(_ size: Int) -> ([[Int]], [[Float]]) {
+            var idx = [[Int]](), wts = [[Float]]()
+            for o in 0..<(size * 2) {
+                let src = (Float(o) + 0.5) / 2 - 0.5
+                let f = Int(src.rounded(.down))
+                idx.append((-1...2).map { Swift.min(Swift.max(f + $0, 0), size - 1) })
+                wts.append(weights(src - Float(f)))
+            }
+            return (idx, wts)
+        }
+        let (ix, wx) = taps(w), (iy, wy) = taps(h)
+        let src = latent.scalars
+        var out = [Float](repeating: 0, count: n * c * H * W)
+        var tmp = [Float](repeating: 0, count: h * W)
+        for p in 0..<(n * c) {
+            let base = p * h * w
+            for y in 0..<h {
+                for X in 0..<W {
+                    var v: Float = 0
+                    for k in 0..<4 { v += wx[X][k] * src[base + y * w + ix[X][k]] }
+                    tmp[y * W + X] = v
+                }
+            }
+            for Y in 0..<H {
+                for X in 0..<W {
+                    var v: Float = 0
+                    for k in 0..<4 { v += wy[Y][k] * tmp[iy[Y][k] * W + X] }
+                    out[p * H * W + Y * W + X] = v
+                }
+            }
+        }
+        return MLShapedArray<Float32>(scalars: out, shape: [n, c, H, W])
+    }
+
     public func generateImages(
         configuration config: Configuration,
         progressHandler: (Progress) -> Bool = { _ in true }
@@ -161,6 +215,23 @@ public struct StableDiffusion3Pipeline: StableDiffusionPipelineProtocol {
 
         // Generate random latent samples from specified seed
         var latents: [MLShapedArray<Float32>] = try generateLatentSamples(configuration: config, scheduler: scheduler[0])
+
+        // Mixed-resolution start: x = (1 - sigma) * x0 + sigma * noise at the first step that will run.
+        if let x0 = mixedResolution.initialDenoisedLatent, config.startStep > 0 {
+            let sigma = scheduler[0].sigma(atStep: config.startStep)
+            latents = latents.map { noise in
+                precondition(noise.scalarCount == x0.scalarCount, "initialDenoisedLatent shape mismatch")
+                return MLShapedArray<Float32>(unsafeUninitializedShape: noise.shape) { result, _ in
+                    noise.withUnsafeShapedBufferPointer { n, _, _ in
+                        x0.withUnsafeShapedBufferPointer { c, _, _ in
+                            for i in 0..<result.count {
+                                result.initializeElement(at: i, to: (1 - sigma) * c[i] + sigma * n[i])
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         // Store denoised latents from scheduler to pass into decoder
         var denoisedLatents: [MLShapedArray<Float32>] = latents.map { MLShapedArray(converting: $0) }
@@ -196,6 +267,8 @@ public struct StableDiffusion3Pipeline: StableDiffusionPipelineProtocol {
         // De-noising loop
         let denoiseStart = CFAbsoluteTimeGetCurrent()
         for (step, t) in timeSteps.enumerated() {
+            if step < config.startStep { continue }
+            if let stop = config.stopAfterSteps, step >= stop { break }
             // Expand the latents for classifier-free guidance
             // and input to the MMDiT noise prediction model
             let latentUnetInput: [MLShapedArray<Float32>] = useGuidance
@@ -253,6 +326,11 @@ public struct StableDiffusion3Pipeline: StableDiffusionPipelineProtocol {
             mmdit.unloadResources()
         }
         logTiming("MMDiT loop", since: denoiseStart)
+        mixedResolution.lastDenoisedLatents = denoisedLatents
+        if config.stopAfterSteps != nil {
+            // Low-resolution phase of mixed-resolution sampling: no decode.
+            return []
+        }
 
         // Decode the latent samples to images
         let decodeStart = CFAbsoluteTimeGetCurrent()

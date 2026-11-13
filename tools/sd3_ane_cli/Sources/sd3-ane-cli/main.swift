@@ -88,6 +88,23 @@ config.targetSize = size
 config.disableSafety = true
 config.reseedScale = Float(opts["reseed"] ?? "0")!
 
+// Mixed-resolution sampling: --lowres <512 resource folder> [--lo-steps 3] runs the first steps at half
+// resolution, upsamples the clean estimate x2, re-noises and finishes at this pipeline's resolution.
+if let lowDir = opts["lowres"] {
+    let loSteps = Int(opts["lo-steps"] ?? "3")!
+    let low = try StableDiffusion3Pipeline(resourcesAt: URL(fileURLWithPath: lowDir), configuration: mlConfig, reduceMemory: true)
+    var lowConfig = config
+    lowConfig.originalSize = size / 2
+    lowConfig.targetSize = size / 2
+    lowConfig.stopAfterSteps = loSteps
+    _ = try low.generateImages(configuration: lowConfig) { _ in true }
+    guard let x0 = low.mixedResolution.lastDenoisedLatents.first else { print("no low-res latent"); exit(1) }
+    low.unloadResources()
+    pipeline.mixedResolution.initialDenoisedLatent = StableDiffusion3Pipeline.upsample2x(x0)
+    config.startStep = loSteps
+    print("mixed-resolution: \(loSteps) low-res steps, then steps \(loSteps + 1)...\(config.stepCount) at full resolution")
+}
+
 let images = try pipeline.generateImages(configuration: config) { progress in
     print("step \(progress.step + 1)/\(progress.stepCount)")
     return true

@@ -36,6 +36,12 @@ public struct PipelineConfiguration: Hashable {
     public var seed: UInt32 = 0
     /// ReSeed bias scale for the first sampler interval (0 = off, 1 = paper default)
     public var reseedScale: Float = 0
+    /// Mixed-resolution sampling (SD3): stop after this many steps without decoding; the clean-image
+    /// estimate is then available as `pipeline.mixedResolution.lastDenoisedLatents`.
+    public var stopAfterSteps: Int? = nil
+    /// Mixed-resolution sampling (SD3): start at this step index from
+    /// `pipeline.mixedResolution.initialDenoisedLatent`, re-noised to that step's sigma with noise from `seed`.
+    public var startStep: Int = 0
     /// Controls the influence of the text prompt on sampling process (0=random images)
     public var guidanceScale: Float = 7.5
     /// List of Images for available ControlNet Models
