@@ -88,7 +88,12 @@ The app logs the time spent adding the biases between stages (first step only,
 | 1024 | 62-65 ms (2 runs) | 30.1 s | ~0.2% |
 
 Few samples, but the timer is direct. The total time with ReSeed on and off cannot
-be told apart at this level (1024: 30.0-30.1 s on, 30.4 s off in the same session).
+be told apart at this level in the same session:
+
+| Resolution | ReSeed on (total / denoiser loop) | ReSeed off (total / denoiser loop) |
+| --- | --- | --- |
+| 512 | 9.27 s / 8.13 s | 9.33 s / 8.19 s, 9.26 s / 8.23 s |
+| 1024 | 30.12 s / 25.10 s, 30.02 s / 25.01 s | 30.38 s / 25.21 s |
 
 ## Overhead (measured on a Mac)
 
