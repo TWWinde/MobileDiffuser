@@ -74,5 +74,31 @@ portraits; alpha 1.0 and 1.5 vary pose, appearance, background and framing.
 | 1024 | 124 s | ~31 s (as without ReSeed) | ~126 MB |
 
 The 512 one-block-per-stage ReSeed path is as fast as the original 4-blocks-per-
-stage 512 resources (~9.5 s), so the finer split and the between-stage bias add
-no measurable cost.
+stage 512 resources (~9.5 s). That comparison mixes two different stage splits and
+cannot resolve the cost of the bias itself; the overhead of ReSeed has not been
+measured separately on the iPhone.
+
+## Overhead (measured on a Mac)
+
+Same model, alpha 0 and alpha 1 interleaved with the same seeds, ANE
+(`tools/sd3_ane_cli`, which prints `[SD3] timing: ReSeed bias adds`):
+
+| Bias add between stages, first step only (23 blocks) | 512 | 1024 |
+| --- | ---: | ---: |
+| Element-wise loop (first implementation) | 30 ms | 96 ms |
+| Row-wise vectorised (vImage f16<->f32 + vDSP) | 23 ms | 84 ms |
+| Vectorised + 8 token chunks in parallel (current) | 13 ms | 46 ms |
+| Share of one image (5.4 s / 18.6 s on the Mac) | ~0.24% | ~0.25% |
+
+- The cost is the CPU reading and writing each stage output once; it is memory
+  traffic, so vectorising alone helps little and splitting across cores helps most.
+- Merely obtaining the output's data pointer, or running the ReSeed path without
+  touching the outputs, costs nothing measurable — there is no hidden buffer
+  synchronisation cost.
+- The current implementation is bit-identical to the first one. Adding directly in
+  half precision is faster still but rounds differently and changes the image, so it
+  is not used.
+- Zero overhead would need the bias as an input added inside every stage (as the
+  last block already does), i.e. a reconversion of all stages.
+
+`MD_RESEED_DIAG=slow|serial|touch|skip` selects the older / diagnostic paths.

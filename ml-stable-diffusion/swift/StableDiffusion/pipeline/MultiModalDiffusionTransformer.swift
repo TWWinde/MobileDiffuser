@@ -567,6 +567,15 @@ public struct MultiModalDiffusionTransformer: ResourceManaging {
 
                 if let reseed, stageIndex >= 1, stageIndex < stages.count - 1 {
                     let block = stageIndex - 1
+                    let reseedStart = CFAbsoluteTimeGetCurrent()
+                    defer {
+                        ReSeedBiases.addSeconds += CFAbsoluteTimeGetCurrent() - reseedStart
+                        if stageIndex == stages.count - 2 {
+                            print(String(format: "[SD3] timing: ReSeed bias adds %.1f ms (%d blocks)",
+                                         ReSeedBiases.addSeconds * 1000, block + 1))
+                            ReSeedBiases.addSeconds = 0
+                        }
+                    }
                     if let img = result.featureValue(for: "latent_image_embeddings_out")?.multiArrayValue {
                         ReSeedBiases.add(reseed.image[block], scale: reseedScale, to: img)
                     }
