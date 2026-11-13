@@ -75,8 +75,20 @@ portraits; alpha 1.0 and 1.5 vary pose, appearance, background and framing.
 
 The 512 one-block-per-stage ReSeed path is as fast as the original 4-blocks-per-
 stage 512 resources (~9.5 s). That comparison mixes two different stage splits and
-cannot resolve the cost of the bias itself; the overhead of ReSeed has not been
-measured separately on the iPhone.
+cannot resolve the cost of the bias itself; the bias add is timed directly below.
+
+## Overhead on iPhone 15 Pro
+
+The app logs the time spent adding the biases between stages (first step only,
+23 blocks), with the parallel vectorised implementation:
+
+| Resolution | Bias add | Warm total | Share |
+| --- | ---: | ---: | ---: |
+| 512 | 18 ms (1 run) | 9.3 s | ~0.2% |
+| 1024 | 62-65 ms (2 runs) | 30.1 s | ~0.2% |
+
+Few samples, but the timer is direct. The total time with ReSeed on and off cannot
+be told apart at this level (1024: 30.0-30.1 s on, 30.4 s off in the same session).
 
 ## Overhead (measured on a Mac)
 

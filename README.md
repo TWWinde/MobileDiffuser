@@ -94,8 +94,8 @@ The same Hugging Face repository also contains the source checkpoints under
 - 4-step model: the [ReSeed](https://twwinde.github.io/reseed-project-page/)
   SD3 Medium 4-step DMD student. One set of weights serves both modes: ReSeed
   off is the plain student; ReSeed on adds the paper's first-interval residual
-  biases (72,192 parameters) for more diverse seeds, for about 0.3% extra time
-  (measured on a Mac; see [docs/RESEED.md](docs/RESEED.md)).
+  biases (72,192 parameters) for more diverse seeds, for about 0.2% extra time
+  on iPhone 15 Pro (see [docs/RESEED.md](docs/RESEED.md)).
 - Runtime path: CLIP-L + CLIP-G text encoders, split MMDiT, VAE decoder.
 - Guidance: CFG disabled in practice, `guidanceScale = 1.0`.
 - Scheduler shift: `shift = 3.0`.
