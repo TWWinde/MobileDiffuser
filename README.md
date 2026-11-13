@@ -43,17 +43,11 @@ Left: FLUX.2 Klein at 1024 x 1024 on an iPhone 15 Pro (this run used the full-re
 mode). Right: models are downloaded inside the app.
 
 <p>
-  <img src="docs/images/klein-showcase.webp" alt="Four 1024 x 1024 FLUX.2 Klein samples from the INT8 Core ML stages" width="560">
+  <img src="docs/images/klein-collage.webp" alt="Collage of fourteen 1024 x 1024 FLUX.2 Klein images: a cyberpunk portrait, a kingfisher, a neon city street, a fox in snow, a sports car, ramen, an astronaut on dunes, a neon OPEN 24 HOURS sign, an old fisherman, a neon motorcycle, a mountain lake, hot air balloons, a mech in a night market and an elderly woman" width="820">
 </p>
 
 FLUX.2 Klein, 4 steps, 1024 x 1024, from the same INT8 Core ML stages the app
-uses (these four were rendered on a Mac).
-
-<p>
-  <img src="docs/images/showcase-collage.png" alt="SD3 Medium 4-step samples generated locally" width="560">
-</p>
-
-Stable Diffusion 3 Medium, 4 steps.
+uses (rendered on a Mac).
 
 [![MobileDiffuser demo video](https://img.youtube.com/vi/m5wlOkeY5Bw/maxresdefault.jpg)](https://www.youtube.com/shorts/m5wlOkeY5Bw)
 
